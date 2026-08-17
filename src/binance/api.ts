@@ -33,19 +33,44 @@ export async function fetchKlines(opts: FetchKlinesOpts): Promise<Candle[]> {
   const url = `${FAPI_BASE}/fapi/v1/klines?${params.toString()}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`klines ${res.status}: ${await res.text()}`);
-  const rows = (await res.json()) as Array<Array<string | number>>;
+  const raw = await res.json();
 
-  return rows.map((r) => ({
-    time: Math.floor(Number(r[0]) / 1000),
-    open: Number(r[1]),
-    high: Number(r[2]),
-    low: Number(r[3]),
-    close: Number(r[4]),
-    volume: Number(r[5]),
-    // Field 9 = taker BUY base-asset volume.  Field 10 is the
-    // matching quote-asset volume which we don't currently need.
-    takerBuyVolume: Number(r[9] ?? 0),
-  }));
+  // Binance sometimes returns an object like {code, msg} on rate-limit /
+  // 4xx errors even when res.ok is true (e.g. some gateway responses).
+  // Make sure the body is actually an array of kline rows before we
+  // start indexing into it.  This used to surface as a cryptic
+  // "Cannot read properties of undefined (reading '0')" when the
+  // response shape changed.
+  if (!Array.isArray(raw)) {
+    throw new Error(
+      `klines: expected an array, got ${typeof raw} from ${url}` +
+        (raw && typeof raw === 'object' ? ` (${JSON.stringify(raw).slice(0, 120)})` : ''),
+    );
+  }
+
+  return raw.map((row, i) => {
+    // Each kline row must be an array of at least 10 elements:
+    //   [openTime, open, high, low, close, volume, closeTime,
+    //    quoteVolume, trades, takerBuyBase, takerBuyQuote, ignore]
+    // We read indices 0..9, so anything shorter is a schema drift.
+    if (!Array.isArray(row) || row.length < 10) {
+      throw new Error(
+        `klines: row[${i}] has shape ${JSON.stringify(row).slice(0, 120)}; ` +
+          `expected an array of length >= 10. Binance may have changed the response schema.`,
+      );
+    }
+    return {
+      time: Math.floor(Number(row[0]) / 1000),
+      open: Number(row[1]),
+      high: Number(row[2]),
+      low: Number(row[3]),
+      close: Number(row[4]),
+      volume: Number(row[5]),
+      // Field 9 = taker BUY base-asset volume.  Field 10 is the
+      // matching quote-asset volume which we don't currently need.
+      takerBuyVolume: Number(row[9] ?? 0),
+    };
+  });
 }
 
 export async function fetchExchangeInfo(): Promise<Record<string, SymbolInfo>> {
