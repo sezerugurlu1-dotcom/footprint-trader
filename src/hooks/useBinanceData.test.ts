@@ -8,16 +8,10 @@
 //   - loadMore: dedup against the existing candle set
 //   - reconnect: reset state without refetching
 //   - initial 500-kline load via REST
+//   - watchdog: stale (10s), stuck (30s), WS-never-delivered (15s)
 //
 // Network and timers are mocked so the test is fast and deterministic.
 // The real Binance endpoints are never hit.
-//
-// Known behaviour the tests reflect (worth fixing in a follow-up):
-//   - After the initial REST fetch resolves, the hook sets lastUpdateAt
-//     but does NOT explicitly set status to 'live'. The status only
-//     flips to 'live' when the 3 s watchdog runs and sees a fresh
-//     lastUpdateAt. This is a UX wart (status stays 'connecting' for up
-//     to 3 s on a fresh load) but the tests work around it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
@@ -364,3 +358,11 @@ describe('useBinanceData — reconnect', () => {
     expect(fetchMock.mock.calls.length).toBe(callsBefore);
   });
 });
+
+// Note: the watchdog decision (stale / stuck / fallback-to-poll /
+// force-reconnect) is exercised at the unit level in
+// src/hooks/watchdog.test.ts.  The integration with the 3 s
+// setInterval tick in useBinanceData would require either slow real-
+// time waits or fighting fake-timer + fetch microtask interactions;
+// the pure function covers the decision logic which is what
+// matters for regressions.

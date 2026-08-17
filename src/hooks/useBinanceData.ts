@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Candle, Interval, SymbolInfo } from '../types';
 import { fetchKlines } from '../binance/api';
 import { KlineStream } from '../binance/ws';
+import { decideWatchdog } from './watchdog';
 
 const MAX_LIVE_CANDLES = 2000;
 const POLL_INTERVAL_MS = 3000;
@@ -199,39 +200,45 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
     const pollId = window.setInterval(pollOnce, POLL_INTERVAL_MS);
 
     // ── 4) Watchdog: stale + stuck-open recovery ───────────────────────
+    // The decision is delegated to a pure function (./watchdog) so
+    // the policy is testable in isolation.  Here we just translate
+    // the decision into React state updates and side effects.
     const watchdog = setInterval(() => {
       if (cancelledRef.current) return;
-      const last = lastUpdateAtRef.current;
-      const now = Date.now();
-
-      // No data ever AND socket has been "open" for 15s → assume WS is
-      // dead in this environment; we'll lean on the poll path. Mark
-      // status as 'live' (since the poll IS providing data) but flip
-      // source to 'poll'.
-      if (last == null) {
-        if (streamOpenAtRef.current && now - streamOpenAtRef.current > 15_000) {
+      const decision = decideWatchdog({
+        now: Date.now(),
+        lastUpdateAt: lastUpdateAtRef.current,
+        streamOpenAt: streamOpenAtRef.current,
+        stuckAfterMs: STUCK_AFTER_MS,
+        staleAfterMs: STALE_AFTER_MS,
+        wsNeverDeliveredMs: 15_000,
+      });
+      switch (decision.kind) {
+        case 'noop':
+          return;
+        case 'fallback-to-poll':
           console.warn('[hook] WS never delivered after 15s — using REST poll only');
           setSource('poll');
           setStatus('live');
+          return;
+        case 'force-reconnect': {
+          console.warn(`[hook] stream stuck for ${Math.round(decision.ageMs / 1000)}s — force reconnect`);
+          const s = streamRef.current;
+          if (s) { s.close(); streamRef.current = null; }
+          setTimeout(() => {
+            if (!cancelledRef.current) {
+              setStatus('connecting');
+              openStream();
+            }
+          }, 500);
+          return;
         }
-        return;
-      }
-
-      const age = now - last;
-      if (age > STUCK_AFTER_MS) {
-        console.warn(`[hook] stream stuck for ${Math.round(age / 1000)}s — force reconnect`);
-        const s = streamRef.current;
-        if (s) { s.close(); streamRef.current = null; }
-        setTimeout(() => {
-          if (!cancelledRef.current) {
-            setStatus('connecting');
-            openStream();
-          }
-        }, 500);
-      } else if (age > STALE_AFTER_MS) {
-        setStatus('stale');
-      } else {
-        setStatus('live');
+        case 'set-stale':
+          setStatus('stale');
+          return;
+        case 'set-live':
+          setStatus('live');
+          return;
       }
     }, 3000);
 
