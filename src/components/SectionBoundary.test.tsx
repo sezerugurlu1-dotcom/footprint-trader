@@ -5,7 +5,9 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { SectionBoundary } from './SectionBoundary';
 
 // A child that always throws so we can exercise the error path.
-function Boom({ message = 'boom' }: { message?: string }) {
+// `never` return type is required so TypeScript accepts this as a
+// valid JSX element even though the function never returns.
+function Boom({ message = 'boom' }: { message?: string }): never {
   throw new Error(message);
 }
 
@@ -47,7 +49,7 @@ describe('SectionBoundary', () => {
   });
 
   it('falls back gracefully when the thrown value is not an Error', () => {
-    function ThrowString() {
+    function ThrowString(): never {
       // eslint-disable-next-line no-throw-literal
       throw 'string error';
     }
