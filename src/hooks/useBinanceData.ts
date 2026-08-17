@@ -149,9 +149,18 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
         setLastPrice(initial[initial.length - 1]?.close ?? null);
         // Treat the initial fetch as a "live" update so the status flips
         // off "connecting" immediately, even before any WS/poll arrives.
+        // (Fix for: status stayed 'connecting' for up to 3 s on every
+        // fresh load because the watchdog was the only thing flipping it.)
         const now = Date.now();
         lastUpdateAtRef.current = now;
         setLastUpdateAt(now);
+        if (initial.length > 0) {
+          setStatus('live');
+        } else {
+          // Empty response from Binance — surface a real error instead of
+          // leaving `loading: true` forever (which used to mask the bug).
+          stableSetError('No candles returned from Binance for this symbol/interval');
+        }
       } catch (e: any) {
         if (!cancelledRef.current) stableSetError(e?.message ?? String(e));
       }

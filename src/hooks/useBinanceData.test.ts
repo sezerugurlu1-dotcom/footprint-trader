@@ -141,7 +141,7 @@ afterEach(() => {
 // ─── Tests ───────────────────────────────────────────────────────────
 
 describe('useBinanceData — initial load', () => {
-  it('populates candles from the initial fetch and exposes lastPrice', async () => {
+  it('populates candles from the initial fetch, exposes lastPrice, and flips status to live', async () => {
     const rows = [klineAt(0), klineAt(1), klineAt(2)];
     vi.stubGlobal('fetch', makeFetchReturning(rows));
 
@@ -156,6 +156,10 @@ describe('useBinanceData — initial load', () => {
     expect(result.current.candles[2]).toMatchObject({ open: 102, close: 104 });
     // klineAt(2) close = 102 + 2 = 104
     expect(result.current.lastPrice).toBe(104);
+    // Status flips to 'live' immediately on initial-fetch success (no
+    // 3-second watchdog wait). Regression test for the bug where the
+    // hook only updated lastUpdateAt and left status at 'connecting'.
+    expect(result.current.status).toBe('live');
   });
 
   it('surfaces a fetch error in the `error` field and does not populate candles', async () => {
@@ -169,6 +173,22 @@ describe('useBinanceData — initial load', () => {
       expect(result.current.error).toMatch(/500/);
     });
     expect(result.current.candles).toEqual([]);
+  });
+
+  it('surfaces an error when the initial fetch returns an empty array (no silent loading state)', async () => {
+    // Regression test: an empty Binance response used to leave
+    // `loading: true` forever, masking the real problem from the user.
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, json: async () => [],
+    })));
+
+    const { result } = renderHook(() => useBinanceData(TEST_SYMBOL, '15m'));
+
+    await waitFor(() => {
+      expect(result.current.error).toMatch(/no candles/i);
+    });
+    expect(result.current.candles).toEqual([]);
+    expect(result.current.loading).toBe(false);
   });
 });
 
