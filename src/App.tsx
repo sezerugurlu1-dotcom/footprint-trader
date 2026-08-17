@@ -16,10 +16,9 @@ import { SectionBoundary } from './components/SectionBoundary';
 import { useBinanceData } from './hooks/useBinanceData';
 import { useFootprintData } from './hooks/useFootprintData';
 import { useExchangeInfo } from './hooks/useExchangeInfo';
+import { useCvdBinSize } from './hooks/useCvdBinSize';
 import type { Interval, SymbolInfo } from './types';
-import { autoBinSize } from './utils/cvdByPrice';
 import type { CvdBinMode } from './utils/cvdByPrice.types';
-import { CVD_BIN_MULTIPLIER } from './utils/cvdByPrice.types';
 
 const DEFAULT_SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
@@ -98,23 +97,15 @@ export default function App() {
     return DEFAULT_SYMBOLS;
   }, [exchangeInfo]);
 
-  // CVD-by-Price bin size, derived from the user's preset + the
-  // candle data.  Recomputed only when the preset, the manual
-  // value, the symbol (tick size) or the candle set changes.
-  const cvdBinSize = useMemo(() => {
-    const tick = symbolInfo?.tickSize ?? 0.01;
-    if (cvdBinMode === 'manual') {
-      return Number.isFinite(cvdBinManual) && cvdBinManual > 0
-        ? cvdBinManual
-        : tick;
-    }
-    const auto = autoBinSize(candles, { tickSize: tick, targetBins: 80 });
-    // `auto` is the same as `medium` (×1); for clarity we use the
-    // explicit multiplier when one exists and fall back to 1.
-    const mult =
-      cvdBinMode === 'auto' ? 1 : CVD_BIN_MULTIPLIER[cvdBinMode];
-    return auto * mult;
-  }, [cvdBinMode, cvdBinManual, symbolInfo, candles]);
+  // CVD-by-Price bin size.  Owns the resolution from preset (auto /
+  // fine / medium / coarse / manual) to a concrete price-bin number;
+  // see useCvdBinSize for the formula.
+  const cvdBinSize = useCvdBinSize({
+    mode: cvdBinMode,
+    manual: cvdBinManual,
+    symbolInfo,
+    candles,
+  });
 
   // Stable setters for Toolbar.
   const onSymbol = useCallback((s: string) => setSymbol(s), []);
