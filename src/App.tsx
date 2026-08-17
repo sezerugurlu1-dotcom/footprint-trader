@@ -178,8 +178,10 @@ export default function App() {
       />
 
       <div className="flex-1 flex min-h-0">
-        {/* Chart area */}
-        <div className="flex-1 min-w-0 relative">
+        {/* Chart area — min-w-[320px] prevents the flex layout from
+            collapsing the chart to 0×0 on very narrow viewports (the
+            lightweight-charts library then has no size to render into). */}
+        <div className="flex-1 min-w-[320px] relative">
           {(loading || !symbolInfo) && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-tv-textDim z-20 pointer-events-none gap-2">
               {error ? (
@@ -223,10 +225,10 @@ export default function App() {
           </SectionBoundary>
         </div>
 
-        {/* Right panel — each child is isolated by a SectionBoundary so a
-            crash in the order book doesn't take down the ticker and vice
-            versa. */}
-        <aside className="w-[240px] border-l border-tv-border bg-tv-panel overflow-y-auto flex-shrink-0">
+        {/* Right panel — hidden below md (768px) so the chart gets the
+            full width on narrow viewports.  Ticker / order book are
+            nice-to-have, not critical for a functional chart. */}
+        <aside className="w-[240px] border-l border-tv-border bg-tv-panel overflow-y-auto flex-shrink-0 hidden md:block">
           <SectionBoundary label="Ticker">
             <TickerInfo
               symbol={symbol}
