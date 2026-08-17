@@ -12,6 +12,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
+    "types": ["node"],
 
     "strict": true,
     "noUnusedLocals": true,
@@ -20,7 +21,6 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true
   },
-  "include": ["src"],
-  "exclude": ["src/main.ts", "src/counter.ts", "src/**/*.test.ts", "src/test/**"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src", "vite.config.ts", "vitest.config.ts"],
+  "exclude": ["src/**/*.test.ts", "src/test/**"]
 }
