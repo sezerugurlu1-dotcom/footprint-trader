@@ -1,7 +1,11 @@
 // Lean chart shell: toolbar, candlestick + volume chart, ticker, order book.
-// Footprint / per-level order flow is intentionally disabled in this build —
-// the source lives in src/utils/footprint.ts and src/components/FootprintOverlay.tsx
-// for a follow-up session.
+// Footprint / per-level order flow is intentionally NOT rendered in this
+// build.  The per-level utility (FootprintBuilder in src/utils/footprint.ts)
+// is still wired up via useFootprintData — it feeds the per-candle delta
+// stats and the max/min rows of the bottom table.  The standalone
+// FootprintOverlay component was removed in the P2 cleanup; the source
+// is preserved in git history (see commits prior to <hash>) if a
+// follow-up session wants to re-mount it.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Toolbar } from './components/Toolbar';

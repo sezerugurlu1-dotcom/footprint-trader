@@ -1,7 +1,7 @@
 // Candlestick + volume chart using lightweight-charts.
-// Footprint overlay intentionally removed for this build — the source
-// is preserved in src/components/FootprintOverlay.tsx for a follow-up
-// session.
+// Footprint overlay is intentionally NOT rendered here.  The
+// per-level data is still computed in useFootprintData and fed into
+// the delta stats + table at the bottom of the chart.
 //
 // The bottom-of-chart delta stats bar (Vol · Δ · Δ Max · Δ Min) and
 // the per-candle delta histogram (at the very bottom of the chart)
