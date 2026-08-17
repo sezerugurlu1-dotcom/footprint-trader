@@ -10,6 +10,10 @@ export default defineConfig({
   },
   build: {
     target: 'es2020',
-    chunkSizeWarningLimit: 1500,
+    // Current bundle: 354 kB main, well under 500 kB warning threshold.
+    // No manual chunk splits yet — Vite's default heuristic is fine for
+    // a single-page app of this size; revisit if we add a heavy vendor
+    // lib (e.g. charting_library).
+    chunkSizeWarningLimit: 500,
   },
 });

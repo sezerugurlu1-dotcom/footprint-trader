@@ -186,8 +186,28 @@ export default function App() {
         {/* Chart area */}
         <div className="flex-1 min-w-0 relative">
           {(loading || !symbolInfo) && (
-            <div className="absolute inset-0 flex items-center justify-center text-tv-textDim z-20 pointer-events-none">
-              {error ? `Error: ${error}` : loading ? 'Loading market data…' : 'Loading symbols…'}
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-tv-textDim z-20 pointer-events-none gap-2">
+              {error ? (
+                <>
+                  <div className="text-tv-red text-sm">Error: {error}</div>
+                  {/418|teapot/i.test(error) && (
+                    <div className="text-xs text-tv-textDim text-center max-w-md">
+                      Binance is blocking the request from this IP (HTTP 418).
+                      Use <span className="font-mono text-tv-text">↻ Symbols</span> to retry,
+                      or pick a different network.
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onReconnect}
+                    className="pointer-events-auto mt-2 px-3 py-1 text-xs text-tv-textDim hover:text-tv-text border border-tv-border rounded"
+                  >
+                    ↻ Retry
+                  </button>
+                </>
+              ) : (
+                <div>{loading ? 'Loading market data…' : 'Loading symbols…'}</div>
+              )}
             </div>
           )}
           <SectionBoundary label="Chart" onRetry={onReconnect}>
