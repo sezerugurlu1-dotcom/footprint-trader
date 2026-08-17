@@ -131,6 +131,11 @@ export class AggTradeStream {
     const url = `wss://fstream.binance.com/ws/${stream}`;
     this.ws = new WebSocket(url);
 
+    // Reset the backoff on every successful open so a single
+    // close+reopen cycle doesn't leave the next attempt at a
+    // permanently-elevated delay.
+    this.ws.onopen = () => { this.backoff.reset(); };
+
     this.ws.onmessage = (ev) => {
       try {
         const m = JSON.parse(ev.data);
@@ -192,6 +197,7 @@ export class DepthStream {
     const stream = `${this.symbol}@depth${this.levels}@100ms`;
     const url = `wss://fstream.binance.com/ws/${stream}`;
     this.ws = new WebSocket(url);
+    this.ws.onopen = () => { this.backoff.reset(); };
 
     this.ws.onmessage = (ev) => {
       try {
@@ -241,6 +247,7 @@ export class TickerStream {
     this.close();
     const url = `wss://fstream.binance.com/ws/${this.symbol}@ticker`;
     this.ws = new WebSocket(url);
+    this.ws.onopen = () => { this.backoff.reset(); };
 
     this.ws.onmessage = (ev) => {
       try {
