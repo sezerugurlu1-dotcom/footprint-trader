@@ -3,6 +3,7 @@
 
 import type { Interval, AggTrade, Candle } from '../types';
 import { intervalMs } from './api';
+import { Backoff } from './backoff';
 
 type Listener<T> = (msg: T) => void;
 
@@ -31,6 +32,7 @@ export class KlineStream {
   private generation = 0; // bumped on each (re)connect; used to ignore stale sockets after force-reconnect
   private messageCount = 0;
   private lastError: string | null = null;
+  private backoff = new Backoff();
 
   constructor(symbol: string, interval: Interval) {
     this.symbol = symbol.toLowerCase();
@@ -51,6 +53,7 @@ export class KlineStream {
 
     ws.onopen = () => {
       if (gen !== this.generation) return;
+      this.backoff.reset();
       console.log(`[kline] socket open gen=${gen}`);
     };
     ws.onmessage = (ev) => {
@@ -86,7 +89,8 @@ export class KlineStream {
       console.log(`[kline] closed gen=${gen} code=${ev.code} reason=${ev.reason || '(none)'} (delivered ${this.messageCount} msgs)`);
       if (gen !== this.generation) return; // replaced by a newer connect()
       this.ws = null;
-      setTimeout(() => this.connect(), 2000);
+      const delay = this.backoff.next();
+      setTimeout(() => this.connect(), delay);
     };
   }
 
@@ -109,6 +113,7 @@ export class AggTradeStream {
   private ws: WebSocket | null = null;
   private listeners: Set<Listener<AggTrade>> = new Set();
   private symbol: string;
+  private backoff = new Backoff();
 
   constructor(symbol: string) {
     this.symbol = symbol.toLowerCase();
@@ -143,7 +148,8 @@ export class AggTradeStream {
 
     this.ws.onclose = () => {
       this.ws = null;
-      setTimeout(() => this.connect(), 2000);
+      const delay = this.backoff.next();
+      setTimeout(() => this.connect(), delay);
     };
     this.ws.onerror = () => { /* close will trigger reconnect */ };
   }
@@ -174,6 +180,7 @@ export class DepthStream {
   private listeners: Set<Listener<DepthSnapshot>> = new Set();
   private symbol: string;
   private levels: 5 | 10 | 20;
+  private backoff = new Backoff();
 
   constructor(symbol: string, levels: 5 | 10 | 20 = 10) {
     this.symbol = symbol.toLowerCase();
@@ -199,7 +206,8 @@ export class DepthStream {
 
     this.ws.onclose = () => {
       this.ws = null;
-      setTimeout(() => this.connect(), 2000);
+      const delay = this.backoff.next();
+      setTimeout(() => this.connect(), delay);
     };
     this.ws.onerror = () => { /* close will trigger reconnect */ };
   }
@@ -223,6 +231,7 @@ export class TickerStream {
   private ws: WebSocket | null = null;
   private listeners: Set<Listener<TickerStreamSnapshot>> = new Set();
   private symbol: string;
+  private backoff = new Backoff();
 
   constructor(symbol: string) {
     this.symbol = symbol.toLowerCase();
@@ -242,7 +251,8 @@ export class TickerStream {
 
     this.ws.onclose = () => {
       this.ws = null;
-      setTimeout(() => this.connect(), 2000);
+      const delay = this.backoff.next();
+      setTimeout(() => this.connect(), delay);
     };
     this.ws.onerror = () => { /* close will trigger reconnect */ };
   }
