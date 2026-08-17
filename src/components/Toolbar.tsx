@@ -18,6 +18,11 @@ interface Props {
   onLoadMore: () => void;
   onReconnect: () => void;
 
+  /** True while the exchangeInfo is being (re-)fetched. */
+  refreshingSymbols: boolean;
+  /** Force-fetch the symbol list from Binance. */
+  onRefreshSymbols: () => void;
+
   // Indicator visibility
   showVwap: boolean;
   showCvd: boolean;
@@ -69,6 +74,7 @@ export function Toolbar({
   cvdBinMode, cvdBinManual, cvdBinSize, onCvdBinMode, onCvdBinManual,
   tickSize,
   cvdStripScale, onCvdStripScaleChange,
+  refreshingSymbols, onRefreshSymbols,
 }: Props) {
   const ageSec = lastUpdateAt ? Math.max(0, Math.floor((Date.now() - lastUpdateAt) / 1000)) : null;
 
@@ -108,6 +114,21 @@ export function Toolbar({
         className="px-2 py-1 text-xs text-tv-textDim hover:text-tv-text hover:bg-tv-panel2 rounded border border-tv-border"
       >
         ↻ Reconnect
+      </button>
+
+      <button
+        type="button"
+        onClick={onRefreshSymbols}
+        disabled={refreshingSymbols}
+        title="Refresh the symbol list from Binance"
+        className={
+          'px-2 py-1 text-xs rounded border ' +
+          (refreshingSymbols
+            ? 'border-tv-border text-tv-textDim/50 cursor-wait'
+            : 'border-tv-border text-tv-textDim hover:text-tv-text hover:bg-tv-panel2')
+        }
+      >
+        {refreshingSymbols ? '… Symbols' : '↻ Symbols'}
       </button>
 
       <div className="h-6 w-px bg-tv-border mx-1" />

@@ -10,7 +10,7 @@ import { TickerInfo } from './components/TickerInfo';
 import { OrderBookPanel } from './components/OrderBookPanel';
 import { useBinanceData } from './hooks/useBinanceData';
 import { useFootprintData } from './hooks/useFootprintData';
-import { fetchExchangeInfo } from './binance/api';
+import { useExchangeInfo } from './hooks/useExchangeInfo';
 import type { Interval, SymbolInfo } from './types';
 import { autoBinSize } from './utils/cvdByPrice';
 import type { CvdBinMode } from './utils/cvdByPrice.types';
@@ -23,7 +23,11 @@ const DEFAULT_SYMBOLS = [
 ];
 
 export default function App() {
-  const [exchangeInfo, setExchangeInfo] = useState<Record<string, SymbolInfo> | null>(null);
+  const {
+    data: exchangeInfo,
+    loading: exchangeInfoLoading,
+    refresh: refreshExchangeInfo,
+  } = useExchangeInfo();
   const [symbol, setSymbol] = useState<string>('BTCUSDT');
   const [interval, setInterval] = useState<Interval>('15m');
 
@@ -52,12 +56,6 @@ export default function App() {
   // 12%).  0.5 = half, 2.0 = double.  Owned here, applied inside
   // ChartView via scaleMargins.
   const [cvdStripScale, setCvdStripScale] = useState<number>(1);
-
-  useEffect(() => {
-    fetchExchangeInfo()
-      .then(setExchangeInfo)
-      .catch((e) => console.error('exchangeInfo failed', e));
-  }, []);
 
   // While we wait for full exchange info, use a sensible default tick.
   const symbolInfo: SymbolInfo | null = useMemo(() => {
@@ -118,6 +116,7 @@ export default function App() {
   const onInterval = useCallback((i: Interval) => setInterval(i), []);
   const onReconnect = useCallback(() => reconnect(), [reconnect]);
   const onLoadMore = useCallback(() => { loadMore(); }, [loadMore]);
+  const onRefreshSymbols = useCallback(() => { void refreshExchangeInfo(); }, [refreshExchangeInfo]);
   const onToggleVwap = useCallback(() => setShowVwap((v) => !v), []);
   const onToggleCvd = useCallback(() => setShowCvd((v) => !v), []);
   const onToggleCvdByPrice = useCallback(() => setShowCvdByPrice((v) => !v), []);
@@ -164,6 +163,8 @@ export default function App() {
         loadingMore={loadingMore}
         onLoadMore={onLoadMore}
         onReconnect={onReconnect}
+        refreshingSymbols={exchangeInfoLoading}
+        onRefreshSymbols={onRefreshSymbols}
         showVwap={showVwap}
         showCvd={showCvd}
         showCvdByPrice={showCvdByPrice}
