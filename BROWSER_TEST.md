@@ -1,62 +1,63 @@
-# Browser Smoke Test Rehberi
+# Browser Smoke Test Guide
 
-> Bu dosya `npm run dev` ile ayağa kaldırılmış bir instance üzerinde senin elle yapacağın test içindir.
-> Mavis'in tarayıcı aracı 639px viewport sınırında takılı kaldı; sen geniş monitörde veya kendi tarayıcında doğrulayacaksın.
+> This file is the manual test list for a running instance of the app
+> (`npm run dev`). The agent's browser tool was stuck at a 639 px viewport
+> during development, so some checks need to be done on a real monitor.
 
-## 1. Dev server'ı başlat
+## 1. Start the dev server
 
 ```powershell
 cd "C:\Users\SEZER\.minimax-agent\projects\footprint-trader"
 npm run dev
 ```
 
-Vite 5173 portunda dinlemeli. `http://localhost:5173` adresini aç.
+Vite should listen on port `5173`. Open `http://localhost:5173` in a browser.
 
-## 2. Beklenen ilk yükleme sırası
+## 2. Expected first-load sequence
 
-| Saniye | Davranış | Beklenen |
+| Seconds | Behaviour | Expected |
 |---|---|---|
-| 0 | "Loading market data…" overlay | Görünür |
-| 1-2 | "live" rozeti (yeşil) | WS bağlandı |
-| 2-3 | İlk candle'lar chart'ta | Görünür olmalı |
-| 3-5 | OrderBook seviyeleri doluyor | 10 ask + 10 bid |
-| 5-10 | Backfill ilerliyor, sağ panelde "Aggregating trades" | StatsPanel sayıları artar |
-| 10-30 | Tüm mumların footprint'i çizilir | POC + imbalance ◀/▶ görünür |
+| 0 | "Loading market data…" overlay | Visible |
+| 1-2 | "live" badge (green) | WS connected |
+| 2-3 | First candles appear on the chart | Visible |
+| 3-5 | Order book populates | 10 ask + 10 bid levels |
+| 5+ | `takerBuyVolume` from the kline stream feeds the per-candle delta bar | Stats bar updates |
 
-## 3. Manuel test listesi
+> The per-level footprint overlay and the divergence markers that earlier
+> versions of this doc referenced are not part of the current build. The
+> footprint source is preserved in `src/components/FootprintOverlay.tsx`
+> for a follow-up session, but it is not mounted by `App.tsx`.
 
-- [ ] **Chart candle'ları görünüyor mu?** (geniş ekranda, >800px chart alanı)
-- [ ] **F tuşu** footprint overlay'i açıp kapatıyor
-- [ ] **A tuşu** imbalance marker'ları açıp kapatıyor
-- [ ] **D tuşu** (Divergence) yeni eklenen delta divergence marker'ları açıp kapatıyor
-- [ ] **Sembol değişimi** (BTCUSDT → ETHUSDT): chart, order book, ticker, stats 1s içinde güncelleniyor
-- [ ] **Interval değişimi** (1m → 1h): mumlar yeniden çiziliyor
-- [ ] **Mouse wheel zoom** chart'ta çalışıyor
-- [ ] **Pencere resize**: chart otomatik yeniden boyutlanıyor
-- [ ] **Hata console**: F12 → Console sekmesi → kırmızı hata yok
+## 3. Manual test list
 
-## 4. Eğer chart boş kalırsa
+- [ ] **Chart candles render** at >800 px chart width
+- [ ] **Symbol switch** (BTCUSDT → ETHUSDT): chart, order book, ticker, stats refresh within ~1 s
+- [ ] **Interval switch** (1m → 1h): candles redraw
+- [ ] **Mouse wheel zoom** works on the chart
+- [ ] **Window resize**: chart auto-resizes
+- [ ] **Indicator toggles** (VWAP, CVD, Δ Price) hide/show the corresponding series
+- [ ] **CVD-by-Price bin-size dropdown** (Auto / Fine / Medium / Coarse / Manual) re-bins the histogram
+- [ ] **CVD-strip scale slider** (0.5× – 2×) resizes the CVD strips
+- [ ] **← arrow** key loads older candles; **Esc** blurs any focused input
+- [ ] **No console errors** in DevTools → Console
 
-DevTools Console'u (F12) aç ve **ilk yükleme** sırasındaki hataları kontrol et.
+## 4. If the chart looks empty
 
-Eğer sadece test ortamının 639px viewport'unda boş kalıyorsa:
-- 1280×800 veya daha geniş bir pencerede dene
-- DevTools → Device Toolbar (Ctrl+Shift+M) → Responsive → 1920×1080 seç
+Open DevTools (F12) and check the Console for first-load errors.
 
-Eğer **gerçek geniş ekranda da boşsa**, console'da şunları kontrol et:
-1. `[lightweight-charts]` ile başlayan uyarılar
+If the chart only fails at the test agent's narrow 639 px viewport:
+- Try a wider window (1280×800 or bigger)
+- Or DevTools → Device Toolbar (Ctrl+Shift+M) → Responsive → 1920×1080
+
+If the chart fails at normal viewport sizes too, check the console for:
+1. `[lightweight-charts]` warnings
 2. `ResizeObserver loop completed with undelivered notifications` (cycle warning)
-3. `Uncaught (in promise)` hataları
+3. `Uncaught (in promise)` errors
 
-## 5. Yeni özellik: Delta Divergence
+## 5. Known test-environment limits
 
-Toolbar'da **Divergence** checkbox'ı eklendi (varsayılan kapalı). Açtığında:
-- Footprint üzerinde klasik order-flow sinyali: fiyat yeni extreme yapıyor ama delta teyit etmiyor
-- Bearish divergence: kırmızı ▼ mumun üzerinde
-- Bullish divergence: yeşil ▲ mumun altında
-- Tuş kısayolu: **D**
-
-## 6. Bilinen test ortamı sınırları
-
-- Tarayıcı aracı 639px viewport'ta chart candle'larını göstermedi (muhtemelen lightweight-charts initial 0×0 layout problemi, normal viewport'ta olmuyor)
-- Diğer tüm bileşenler (sembol, interval, footprint toggle, klavye kısayolları, order book, ticker, stats) doğrulandı
+- The agent's browser tool could not render candles at 639 px (likely a
+  `lightweight-charts` initial 0×0 layout issue that does not occur at
+  normal viewports).
+- All other components (symbol, interval, indicator toggles, order book,
+  ticker, stats bar, keyboard shortcuts) were verified.
