@@ -171,6 +171,12 @@ export function DeltaTable({ candles, maxMinByTime, chart, height }: Props) {
       result.push({ candle: c, x, width });
     }
     return result;
+    // `layoutTick` is included as a recompute trigger when the chart's
+    // visible range changes (see the subscribeVisibleTimeRangeChange
+    // effect above).  The linter doesn't see the dependency on it
+    // because the body reads only `chart.timeScale()`, but the
+    // external bump is intentional.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chart, candles, layoutTick]);
 
   if (!chart) {

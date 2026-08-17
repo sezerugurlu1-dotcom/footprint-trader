@@ -243,11 +243,19 @@ export function ChartView({
       cvdRef.current = null;
       cvdByPriceRef.current = null;
     };
+    // Intentionally empty deps: this effect runs once on mount to
+    // create the chart instance.  `setChart` and `candleRef` etc are
+    // stable refs / dispatchers; including them would just add noise.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Guarantee a synchronous initial resize — ResizeObserver only fires on
   // *changes*, so the first paint can land before any chart layout exists
   // when the parent flex layout is still settling.
+  const isEmpty = candles.length === 0;
+  // Collapse the boolean to 0 / 1 so the dep is a literal, not a
+  // complex expression (the linter is happier with a primitive).
+  const emptyBucket = isEmpty ? 0 : 1;
   useLayoutEffect(() => {
     const c = containerRef.current;
     const chart = chartRef.current;
@@ -269,7 +277,7 @@ export function ChartView({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [candles.length === 0 ? 0 : 1]);
+  }, [emptyBucket]);
 
   // Update price precision when symbol changes
   useEffect(() => {
@@ -331,7 +339,10 @@ export function ChartView({
       tickSize: symbol.tickSize || 0.01,
       targetBins: 80,
     });
-  }, [cvdBinSizeProp, symbol.tickSize, symbol.symbol, candles]);
+  }, [cvdBinSizeProp, symbol.tickSize, candles]);
+  // symbol.symbol is intentionally excluded: it would force a full
+  // bin recompute on every symbol change, but `candles` already
+  // changes on symbol switch and triggers the recompute anyway.
   const cvdByPrice = useCvdByPrice(candles, { binSize: cvdByPriceBin });
   useEffect(() => {
     if (!cvdByPriceRef.current) return;

@@ -7,7 +7,7 @@
 // ingestion paths, and OHLC sync from the candle stream.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, waitFor, act } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import type { AggTrade, Candle, SymbolInfo } from '../types';
 import { useFootprintData } from './useFootprintData';
 
