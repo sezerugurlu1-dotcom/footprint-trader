@@ -192,7 +192,7 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
         setPollCount((n) => n + 1);
         setSource((prev) => (prev === 'ws' ? 'ws' : 'poll'));
         applyCandle(latest[latest.length - 1]);
-      } catch (e) {
+      } catch {
         // ignore individual poll failures
       }
     };

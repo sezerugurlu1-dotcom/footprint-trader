@@ -50,7 +50,7 @@ describe('SectionBoundary', () => {
 
   it('falls back gracefully when the thrown value is not an Error', () => {
     function ThrowString(): never {
-      // eslint-disable-next-line no-throw-literal
+       
       throw 'string error';
     }
     render(

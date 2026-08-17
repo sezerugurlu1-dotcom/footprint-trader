@@ -86,7 +86,7 @@ describe('computeCvd', () => {
 
   it('resets multiple times across many sessions', () => {
     // Single-anchor (no reset) groups everything into one bucket.
-    const noReset = (t: number) => 0;
+    const noReset = (_t: number) => 0;
     const candles = [
       { time: 1, takerBuyVolume: 6, volume: 10 },
       { time: 2, takerBuyVolume: 6, volume: 10 },

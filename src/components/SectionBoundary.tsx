@@ -58,18 +58,16 @@ export class SectionBoundary extends Component<Props, State> {
         <div className="font-mono text-tv-textDim break-words">
           {error.message || String(error)}
         </div>
-        {(this.props.onRetry || true) && (
-          <button
-            type="button"
-            onClick={() => {
-              this.reset();
-              this.props.onRetry?.();
-            }}
-            className="mt-2 px-2 py-1 text-xs text-tv-textDim hover:text-tv-text border border-tv-border rounded"
-          >
-            ↻ Retry
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => {
+            this.reset();
+            this.props.onRetry?.();
+          }}
+          className="mt-2 px-2 py-1 text-xs text-tv-textDim hover:text-tv-text border border-tv-border rounded"
+        >
+          ↻ Retry
+        </button>
       </div>
     );
   }

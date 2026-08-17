@@ -21,7 +21,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import type { Candle, SymbolInfo } from '../types';
+import type { SymbolInfo } from '../types';
 import { useBinanceData } from './useBinanceData';
 
 // ─── Test fixtures ───────────────────────────────────────────────────
