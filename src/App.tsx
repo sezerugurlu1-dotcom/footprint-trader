@@ -8,6 +8,7 @@ import { Toolbar } from './components/Toolbar';
 import { ChartView } from './components/ChartView';
 import { TickerInfo } from './components/TickerInfo';
 import { OrderBookPanel } from './components/OrderBookPanel';
+import { SectionBoundary } from './components/SectionBoundary';
 import { useBinanceData } from './hooks/useBinanceData';
 import { useFootprintData } from './hooks/useFootprintData';
 import { useExchangeInfo } from './hooks/useExchangeInfo';
@@ -189,33 +190,41 @@ export default function App() {
               {error ? `Error: ${error}` : loading ? 'Loading market data…' : 'Loading symbols…'}
             </div>
           )}
-          <ChartView
-            symbol={symbolInfo}
-            candles={candles}
-            lastPrice={lastPrice}
-            latestVolume={latestVolume}
-            maxMinByTime={maxMinByTime}
-            showVwap={showVwap}
-            showCvd={showCvd}
-            showCvdByPrice={showCvdByPrice}
-            cvdBinSize={cvdBinSize}
-            bottomPanelHeight={bottomPanelHeight}
-            onBottomPanelHeightChange={onBottomPanelHeightChange}
-            cvdStripScale={cvdStripScale}
-          />
+          <SectionBoundary label="Chart" onRetry={onReconnect}>
+            <ChartView
+              symbol={symbolInfo}
+              candles={candles}
+              lastPrice={lastPrice}
+              latestVolume={latestVolume}
+              maxMinByTime={maxMinByTime}
+              showVwap={showVwap}
+              showCvd={showCvd}
+              showCvdByPrice={showCvdByPrice}
+              cvdBinSize={cvdBinSize}
+              bottomPanelHeight={bottomPanelHeight}
+              onBottomPanelHeightChange={onBottomPanelHeightChange}
+              cvdStripScale={cvdStripScale}
+            />
+          </SectionBoundary>
         </div>
 
-        {/* Right panel */}
+        {/* Right panel — each child is isolated by a SectionBoundary so a
+            crash in the order book doesn't take down the ticker and vice
+            versa. */}
         <aside className="w-[240px] border-l border-tv-border bg-tv-panel overflow-y-auto flex-shrink-0">
-          <TickerInfo
-            symbol={symbol}
-            lastPrice={lastPrice}
-            precision={symbolInfo?.pricePrecision ?? 2}
-          />
-          <OrderBookPanel
-            symbol={symbol}
-            precision={symbolInfo?.pricePrecision ?? 2}
-          />
+          <SectionBoundary label="Ticker">
+            <TickerInfo
+              symbol={symbol}
+              lastPrice={lastPrice}
+              precision={symbolInfo?.pricePrecision ?? 2}
+            />
+          </SectionBoundary>
+          <SectionBoundary label="Order book">
+            <OrderBookPanel
+              symbol={symbol}
+              precision={symbolInfo?.pricePrecision ?? 2}
+            />
+          </SectionBoundary>
           <div className="p-3 text-[10px] text-tv-textDim leading-relaxed border-t border-tv-border">
             <div className="font-semibold text-tv-text mb-1">Chart</div>
             Live Binance USDT-M Futures candles via <span className="font-mono">@kline</span> stream.
