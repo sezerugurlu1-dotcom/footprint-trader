@@ -14,6 +14,8 @@ dist-ssr
 
 # Build / type-check artefacts
 *.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 
 # Test coverage
 coverage
