@@ -1,7 +1,7 @@
 import type { Interval } from '../types';
 import { INTERVALS } from '../types';
 import type { LiveStatus, LiveSource } from '../hooks/useBinanceData';
-import type { CvdBinMode } from '../App';
+import type { CvdBinMode } from '../utils/cvdByPrice.types';
 
 interface Props {
   symbol: string;
