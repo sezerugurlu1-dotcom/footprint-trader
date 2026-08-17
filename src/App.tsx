@@ -33,7 +33,11 @@ export default function App() {
     refresh: refreshExchangeInfo,
   } = useExchangeInfo();
   const [symbol, setSymbol] = useState<string>('BTCUSDT');
-  const [interval, setInterval] = useState<Interval>('15m');
+  // Renamed the setter to avoid shadowing the global setInterval timer
+  // function.  A future maintainer writing `setInterval(cb, 1000)` inside
+  // this component would otherwise silently call the React state setter
+  // instead of scheduling a timer.
+  const [interval, setIntervalState] = useState<Interval>('15m');
 
   // Indicator visibility — separate from data state so toggling
   // doesn't re-fetch candles.  Defaults: all on.
@@ -109,7 +113,7 @@ export default function App() {
 
   // Stable setters for Toolbar.
   const onSymbol = useCallback((s: string) => setSymbol(s), []);
-  const onInterval = useCallback((i: Interval) => setInterval(i), []);
+  const onInterval = useCallback((i: Interval) => setIntervalState(i), []);
   const onReconnect = useCallback(() => reconnect(), [reconnect]);
   const onLoadMore = useCallback(() => { loadMore(); }, [loadMore]);
   const onRefreshSymbols = useCallback(() => { void refreshExchangeInfo(); }, [refreshExchangeInfo]);
