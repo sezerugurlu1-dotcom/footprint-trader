@@ -2,6 +2,7 @@
   "name": "footprint-trader",
   "private": true,
   "version": "0.0.0",
+  "description": "TradingView-style Binance USDT-M Futures chart with candles, live VWAP, slope-colored CVD, a favorites list, and a per-candle delta table.",
   "type": "module",
   "scripts": {
     "dev": "vite",

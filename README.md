@@ -1,8 +1,10 @@
 # Footprint Trader
 
 A browser-based, TradingView-style **Binance USDT-M Futures** chart with
-candles, volume, and order-flow overlays (VWAP, CVD, CVD-by-Price).
-Built on top of [`lightweight-charts`](https://github.com/tradingview/lightweight-charts).
+candles, volume, and live order-flow overlays (VWAP + slope-colored
+CVD). Built on top of
+[`lightweight-charts`](https://github.com/tradingview/lightweight-charts) v5
+with a multi-pane layout (price + indicator).
 
 > ⚠️ **Research / educational use only.** This is not investment
 > software. It streams public market data from Binance and renders a
@@ -34,17 +36,18 @@ npm run preview     # serve the built bundle
   ticks, REST polling every 3 s as a fallback when WS is blocked
   (common in some regions / behind certain firewalls).  A 30 s
   watchdog force-reconnects a stuck stream.
-- **Three toggleable indicators**:
+- **Two toggleable overlays**, each with a period selector
+  (session / daily / weekly / monthly for VWAP; daily / weekly for CVD):
   - **VWAP** (amber) on the main price scale
-  - **CVD** (cumulative delta) on its own bottom strip
-  - **CVD-by-Price** (redesign) histogram with five bin-size presets
-    (Auto / Fine / Medium / Coarse / Manual) and a resizable strip
-- **Right panel**: 24h ticker summary + top-10 order-book ladder
-  (100 ms updates from `@depth10@100ms`)
-- **Per-candle delta** bar (Vol · Δ · Δ Max · Δ Min) + Footprint
-  Summary table at the bottom of the chart
+  - **CVD** (cumulative delta) on its own bottom pane, slope-colored
+    (green where delta is rising, red where it is falling)
+- **Favorites list** in the right panel — pin symbols to the top with
+  a single click, persisted in `localStorage`, BTCUSDT seeded by
+  default. ★ toggle in the chart's top-left corner.
+- **24h ticker** summary next to the favorites list
+- **Per-candle delta** bar (Vol · Δ · Δ Max · Δ Min) + delta table
+  at the bottom of the chart
 - **Resizable bottom panel** (60 – 480 px)
-- **Load-more** older history via toolbar button or **←** arrow key
 - **Symbol refresh** button (↻ Symbols) re-fetches the exchange-info
   symbol list; cached in `sessionStorage` for 24 h
 
@@ -65,25 +68,25 @@ src/
 ├── hooks/                         React glue around the data layer
 │   ├── useBinanceData.ts          candles + dual-source + watchdog
 │   ├── useFootprintData.ts        per-level delta + backfill
-│   ├── useOrderBook.ts            order book + ticker
-│   ├── useExchangeInfo.ts         cached symbol list (NEW)
-│   ├── useVwap.ts                 VWAP line
-│   ├── useCvd.ts                  time-based CVD line
-│   └── useCvdByPrice.ts           redesigned price-binned CVD
+│   ├── useExchangeInfo.ts         cached symbol list
+│   ├── useFavorites.ts            favorites list (localStorage)
+│   ├── useVwap.ts                 VWAP line with period anchor
+│   └── useCvd.ts                  CVD line with period anchor
 │
 ├── utils/                         pure, tested logic
 │   ├── footprint.ts               FootprintBuilder (per-level agg)
-│   ├── cvd.ts, cvdByPrice.ts, vwap.ts
-│   ├── cvdByPrice.types.ts        CvdBinMode + multiplier constants
+│   ├── cvd.ts                     splitCvdBySlope (slope-color helper)
+│   ├── vwap.ts                    VWAP accumulator
+│   ├── periodAnchors.ts           session/daily/weekly/monthly anchors
 │   ├── format.ts, timeFormat.ts
-│   └── *.test.ts                  77 unit tests
+│   └── *.test.ts                  unit tests
 │
 ├── components/
-│   ├── ChartView.tsx              chart + all overlays + resizable panel
-│   ├── ChartLegend.tsx            OHLCV HUD following the crosshair
-│   ├── Toolbar.tsx                symbol/interval/indicators/bin/scale
+│   ├── ChartView.tsx              multi-pane chart (candles + CVD)
+│   ├── ChartLegend.tsx            OHLCV HUD + ★ favorite toggle
+│   ├── Toolbar.tsx                symbol / interval / period selectors
 │   ├── TickerInfo.tsx             24h stats in the right panel
-│   ├── OrderBookPanel.tsx         10-level ladder
+│   ├── FavoritesList.tsx          pinned symbols (replaces order book)
 │   ├── DeltaStatsBar.tsx          Vol · Δ · Δ Max · Δ Min
 │   ├── DeltaTable.tsx             per-candle summary
 │   ├── VResizeHandle.tsx          drag handle for the bottom panel
@@ -96,13 +99,16 @@ src/
 1. **Candles** — `useBinanceData` does an initial 500-kline REST load,
    then opens a `@kline` WS plus a 3 s REST poll (so a WS block doesn't
    stop the chart).  A 30 s watchdog force-reconnects a stuck stream.
-2. **Order book + ticker** — `useOrderBook` opens `@depth10@100ms` and
-   `@ticker` WS streams directly.
+2. **Ticker** — `useTicker` opens a `@ticker` WS stream and feeds the
+   24h stats panel next to the favorites list.
 3. **Per-level data** — `useFootprintData` opens `@trade` (we used
    `@aggTrade` first but it stopped delivering payloads on USDT-M
    around 2026-08) and backfills ~50 k recent trades via
    `fetchRecentAggTrades`, which walks **backward from "now"** because
    Binance rejects `aggTrades` windows wider than 2 days.
+4. **Favorites** — `useFavorites` reads / writes a JSON list in
+   `localStorage` under `footprint-trader.favorites.v1`. The active
+   symbol is pinned to the top of the list with a ► indicator.
 
 ## Test-environment caveat
 
@@ -131,7 +137,7 @@ shown in the UI:
 
 ```powershell
 npm run dev         # vite dev server with HMR
-npm test            # 77 unit tests (vitest)
+npm test            # unit tests (vitest)
 npm run build       # type-check + production build
 npx tsc -b --noEmit # type-check only
 ```
@@ -143,9 +149,9 @@ CI runs on push to `main` and on PRs: type-check → build → test.  See
 
 1. Build the pure logic in `src/utils/` (test it with a `.test.ts`).
 2. Wrap it in a hook in `src/hooks/`.
-3. Wire it into `ChartView.tsx` (a new `ISeriesApi` on a dedicated
-   price scale is the usual pattern) and into `Toolbar.tsx` (a toggle
-   button + any size controls).
+3. Wire it into `ChartView.tsx` — either a new `ISeriesApi` on the
+   existing price scale or a brand-new pane via `chart.addPane()`. Add
+   a toggle button + any size controls in `Toolbar.tsx`.
 
 ## License
 
