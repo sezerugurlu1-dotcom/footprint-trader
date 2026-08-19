@@ -17,6 +17,7 @@
 // Bounded allocations (one output point per input candle).
 
 import type { Candle } from '../types';
+import type { LineData, Time } from 'lightweight-charts';
 
 export interface CvdPoint {
   time: number;   // candle open (unix seconds) — matches Candle.time
@@ -79,4 +80,84 @@ export function computeCvd(
     out[i] = { time: c.time, value: cum };
   }
   return out;
+}
+
+// ─── Slope-coloured split ───────────────────────────────────────────────
+//
+// The chart paints the CVD line green when the running total is
+// rising and red when it is falling.  We can't change a LineSeries'
+// colour per-segment, so we split the points into two parallel
+// arrays — one per colour — and draw them as two stacked series.
+// The green series is drawn first (under) and the red series on
+// top, so the red overwrites the green only on the segments that
+// are actually down-moves.
+//
+// "Elbow" handling: at every direction change, the previous
+// point is added to BOTH series.  That keeps each line continuous
+// across the boundary and produces a sharp corner at the inflection
+// instead of a dashed gap.  Without the elbow, the green line
+// would visibly terminate at the last up point and the red line
+// would start one tick later, leaving a 1-bar blank.
+
+/**
+ * Split a CVD series into "up" and "down" segments for slope-based
+ * colouring.
+ *
+ * Approach: the `up` array contains EVERY point and is drawn first
+ * (under); the `down` array contains only the points that are part
+ * of a down-move segment (plus the elbow that bridges consecutive
+ * down runs) and is drawn on top.  The result is a single
+ * continuous line that changes colour at the elbow between an
+ * up-move and a down-move.
+ *
+ * The elbow trick: when a down segment starts after an up segment,
+ * the previous point (the last up point) is included in BOTH
+ * series so the red line begins at the same (time, value) where
+ * the green line last rendered — no 1-bar gap, no overshoot.
+ *
+ * Flat (equal) candles do not flip the colour — the line just
+ * continues in the last established direction.  Two flat candles in
+ * a row are still one continuous segment.
+ */
+export function splitCvdBySlope(
+  points: ReadonlyArray<CvdPoint>,
+): { up: LineData[]; down: LineData[] } {
+  const up: LineData[] = [];
+  const down: LineData[] = [];
+  if (points.length === 0) return { up, down };
+
+  // The green line is continuous across the whole range so it
+  // sits underneath the red line everywhere a red line would not
+  // cover.  Every point goes in `up`.
+  for (const p of points) {
+    up.push({ time: p.time as Time, value: p.value });
+  }
+
+  // The red line is continuous only across down-move segments.
+  // We add the elbow (the previous point) at every direction
+  // change into a down move so the red line meets the green line
+  // exactly at the elbow and the colour transition is sharp.
+  let lastDir: 'up' | 'down' | null = null;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const isDown = curr.value < prev.value;
+    // Equal values continue the previous direction — they don't
+    // flip the colour.  isStrictDown is true only for actual
+    // down-moves.
+    if (isDown) {
+      if (lastDir !== 'down') {
+        down.push({ time: prev.time as Time, value: prev.value });
+      }
+      down.push({ time: curr.time as Time, value: curr.value });
+      lastDir = 'down';
+    } else if (curr.value > prev.value) {
+      // Up-move: don't add to down.  The green line already covers
+      // this segment.
+      lastDir = 'up';
+    }
+    // Equal: leave lastDir as-is.
+  }
+
+  return { up, down };
 }

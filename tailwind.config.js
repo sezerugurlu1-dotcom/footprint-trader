@@ -14,6 +14,11 @@ export default {
           green: '#26a69a',
           red: '#ef5350',
           accent: '#2962ff',
+          // Amber used by the VWAP line and the favourite-star fill.
+          // Keeping it the same value as the VWAP overlay keeps the
+          // visual identity of "favourites" consistent with the
+          // existing chart colour palette.
+          amber: '#fbbf24',
         },
       },
       fontFamily: {

@@ -1,11 +1,18 @@
-// ChartLegend — the classic TradingView-style OHLCV status line that
-// follows the crosshair. Falls back to the last candle when the user
-// isn't hovering. Positioned absolutely in the top-left of the chart.
+// ChartLegend — TradingView-style OHLCV status line that follows
+// the crosshair.  Falls back to the last candle when the user isn't
+// hovering.  Positioned absolutely in the top-left of the chart.
+//
+// In addition to the OHLCV block, the legend hosts the ★ favourite
+// toggle.  The button is a *separate* element from the OHLCV block
+// because the OHLCV box has `pointer-events: none` (so the crosshair
+// can pass through it) — without that, hovering near the legend
+// would feel sticky.  The star button is in a sibling container with
+// the default `pointer-events: auto`.
 
 import { useEffect, useState } from 'react';
 import type { IChartApi, ISeriesApi, MouseEventParams, Time } from 'lightweight-charts';
 import { formatVolume } from '../utils/format';
-import type { Candle } from '../types';
+import type { Candle, SymbolInfo } from '../types';
 
 interface Props {
   chart: IChartApi | null;
@@ -18,9 +25,20 @@ interface Props {
    *  legend updates on every live kline tick without polling. */
   latest: { time: number; open: number; high: number; low: number; close: number; volume: number } | null;
   precision: number;
+  /** Current symbol — rendered next to the ★ so the user can see
+   *  which pair the legend is reporting OHLCV for. */
+  symbol: SymbolInfo;
+  /** True when the current symbol is in the user's favourites set.
+   *  Drives the star's filled/outline + colour state. */
+  isFavorite: boolean;
+  /** Toggle favourite for the current symbol. */
+  onToggleFavorite: () => void;
 }
 
-export function ChartLegend({ chart, candleSeries, candles, latest, precision }: Props) {
+export function ChartLegend({
+  chart, candleSeries, candles, latest, precision,
+  symbol, isFavorite, onToggleFavorite,
+}: Props) {
   const [hovered, setHovered] = useState<Ohlcv | null>(null);
 
   // Subscribe to the crosshair. On each move, capture the candle under
@@ -79,20 +97,50 @@ export function ChartLegend({ chart, candleSeries, candles, latest, precision }:
   });
 
   return (
-    <div
-      className={`absolute top-2 left-2 z-10 px-2.5 py-1.5 rounded text-[11px] font-mono leading-tight
-                  bg-tv-panel/80 backdrop-blur-sm border border-tv-border
-                  ${hovered ? 'opacity-100' : 'opacity-90'}`}
-      style={{ pointerEvents: 'none' }}
-    >
-      <div className="text-tv-textDim text-[10px] mb-0.5">{dateStr}</div>
-      <div className="flex items-center gap-3">
-        <span><span className="text-tv-textDim">O </span><span className={accent}>{fmt(ohlcv.open)}</span></span>
-        <span><span className="text-tv-textDim">H </span><span className="text-tv-green">{fmt(ohlcv.high)}</span></span>
-        <span><span className="text-tv-textDim">L </span><span className="text-tv-red">{fmt(ohlcv.low)}</span></span>
-        <span><span className="text-tv-textDim">C </span><span className={accent}>{fmt(ohlcv.close)}</span></span>
-        <span className="text-tv-textDim">·</span>
-        <span><span className="text-tv-textDim">Vol </span><span className="text-tv-text">{formatVolume(ohlcv.volume)}</span></span>
+    <div className="absolute top-2 left-2 z-10 flex items-start gap-1.5">
+      {/* Pair-name + star button.  Sits to the LEFT of the OHLCV
+          box.  The button is a real <button> so keyboard / screen-
+          reader users can tab to it. */}
+      <button
+        type="button"
+        onClick={onToggleFavorite}
+        aria-label={isFavorite ? `Remove ${symbol.symbol} from favorites` : `Add ${symbol.symbol} to favorites`}
+        aria-pressed={isFavorite}
+        title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+        className={
+          'flex items-center gap-1.5 px-2 py-1 rounded text-xs font-mono ' +
+          'bg-tv-panel/80 backdrop-blur-sm border ' +
+          (isFavorite
+            ? 'border-tv-amber/60 text-tv-amber hover:bg-tv-panel'
+            : 'border-tv-border text-tv-textDim hover:text-tv-amber hover:border-tv-amber/40')
+        }
+      >
+        <span aria-hidden="true" className="text-[14px] leading-none">
+          {/* Filled star when favourite, outlined when not.  Two
+              glyphs (★ / ☆) keep the icon readable at small sizes
+              without relying on colour alone. */}
+          {isFavorite ? '★' : '☆'}
+        </span>
+        <span className="font-semibold tracking-tight">{symbol.symbol}</span>
+      </button>
+
+      {/* OHLCV box.  pointer-events: none so the crosshair passes
+          through and hovering near the legend feels natural. */}
+      <div
+        className={`px-2.5 py-1.5 rounded text-[11px] font-mono leading-tight
+                    bg-tv-panel/80 backdrop-blur-sm border border-tv-border
+                    ${hovered ? 'opacity-100' : 'opacity-90'}`}
+        style={{ pointerEvents: 'none' }}
+      >
+        <div className="text-tv-textDim text-[10px] mb-0.5">{dateStr}</div>
+        <div className="flex items-center gap-3">
+          <span><span className="text-tv-textDim">O </span><span className={accent}>{fmt(ohlcv.open)}</span></span>
+          <span><span className="text-tv-textDim">H </span><span className="text-tv-green">{fmt(ohlcv.high)}</span></span>
+          <span><span className="text-tv-textDim">L </span><span className="text-tv-red">{fmt(ohlcv.low)}</span></span>
+          <span><span className="text-tv-textDim">C </span><span className={accent}>{fmt(ohlcv.close)}</span></span>
+          <span className="text-tv-textDim">·</span>
+          <span><span className="text-tv-textDim">Vol </span><span className="text-tv-text">{formatVolume(ohlcv.volume)}</span></span>
+        </div>
       </div>
     </div>
   );

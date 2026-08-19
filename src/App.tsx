@@ -11,14 +11,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Toolbar } from './components/Toolbar';
 import { ChartView } from './components/ChartView';
 import { TickerInfo } from './components/TickerInfo';
-import { OrderBookPanel } from './components/OrderBookPanel';
+import { FavoritesList } from './components/FavoritesList';
 import { SectionBoundary } from './components/SectionBoundary';
 import { useBinanceData } from './hooks/useBinanceData';
 import { useFootprintData } from './hooks/useFootprintData';
 import { useExchangeInfo } from './hooks/useExchangeInfo';
-import { useCvdBinSize } from './hooks/useCvdBinSize';
+import { useFavorites } from './hooks/useFavorites';
 import type { Interval, SymbolInfo } from './types';
-import type { CvdBinMode } from './utils/cvdByPrice.types';
+import type { CvdPeriod, VwapPeriod } from './utils/periodAnchors';
 
 const DEFAULT_SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
@@ -39,18 +39,16 @@ export default function App() {
   // instead of scheduling a timer.
   const [interval, setIntervalState] = useState<Interval>('15m');
 
-  // Indicator visibility — separate from data state so toggling
-  // doesn't re-fetch candles.  Defaults: all on.
-  const [showVwap, setShowVwap] = useState(true);
-  const [showCvd, setShowCvd] = useState(true);
-  const [showCvdByPrice, setShowCvdByPrice] = useState(true);
-  // CVD-by-Price bin-size mode.  `auto` derives the bin from the
-  // actual price range (recommended); the other modes are explicit
-  // multipliers on top of `auto` so the user can pick finer or
-  // chunkier profiles without having to enter a number.
-  const [cvdBinMode, setCvdBinMode] = useState<CvdBinMode>('auto');
-  // Manual bin size, used only when `cvdBinMode === 'manual'`.
-  const [cvdBinManual, setCvdBinManual] = useState<number>(1);
+  // VWAP / CVD reset periods.  `session` matches the original
+  // daily-reset behaviour for VWAP.  CVD defaults to daily reset.
+  const [vwapPeriod, setVwapPeriod] = useState<VwapPeriod>('session');
+  const [cvdPeriod, setCvdPeriod] = useState<CvdPeriod>('daily');
+
+  // User's favourite pairs.  Persists to localStorage; defaults to
+  // BTCUSDT on first run.  The ★ button in the top-left of the chart
+  // and the right-side list both call `toggle(...)`.
+  const { favorites, isFavorite, toggle: toggleFavorite } = useFavorites();
+  const isCurrentFavorite = isFavorite(symbol);
 
   // Resizable bottom panel (DeltaStatsBar + DeltaTable).  The
   // user drags the handle above the panel to change this value;
@@ -58,12 +56,6 @@ export default function App() {
   // rows clearly.  Clamping happens in the VResizeHandle's
   // parent effect, not here.
   const [bottomPanelHeight, setBottomPanelHeight] = useState<number>(140);
-
-  // CVD-strip scale: 1.0 means the combined CVD line + CVD-by-Price
-  // histogram take up the original 20% of the chart height (8% +
-  // 12%).  0.5 = half, 2.0 = double.  Owned here, applied inside
-  // ChartView via scaleMargins.
-  const [cvdStripScale, setCvdStripScale] = useState<number>(1);
 
   // While we wait for full exchange info, use a sensible default tick.
   const symbolInfo: SymbolInfo | null = useMemo(() => {
@@ -101,35 +93,18 @@ export default function App() {
     return DEFAULT_SYMBOLS;
   }, [exchangeInfo]);
 
-  // CVD-by-Price bin size.  Owns the resolution from preset (auto /
-  // fine / medium / coarse / manual) to a concrete price-bin number;
-  // see useCvdBinSize for the formula.
-  const cvdBinSize = useCvdBinSize({
-    mode: cvdBinMode,
-    manual: cvdBinManual,
-    symbolInfo,
-    candles,
-  });
-
   // Stable setters for Toolbar.
   const onSymbol = useCallback((s: string) => setSymbol(s), []);
   const onInterval = useCallback((i: Interval) => setIntervalState(i), []);
   const onReconnect = useCallback(() => reconnect(), [reconnect]);
   const onLoadMore = useCallback(() => { loadMore(); }, [loadMore]);
   const onRefreshSymbols = useCallback(() => { void refreshExchangeInfo(); }, [refreshExchangeInfo]);
-  const onToggleVwap = useCallback(() => setShowVwap((v) => !v), []);
-  const onToggleCvd = useCallback(() => setShowCvd((v) => !v), []);
-  const onToggleCvdByPrice = useCallback(() => setShowCvdByPrice((v) => !v), []);
-  const onCvdBinMode = useCallback((m: CvdBinMode) => setCvdBinMode(m), []);
-  const onCvdBinManual = useCallback((n: number) => setCvdBinManual(n), []);
   const onBottomPanelHeightChange = useCallback(
     (h: number) => setBottomPanelHeight(h),
     [],
   );
-  const onCvdStripScaleChange = useCallback(
-    (s: number) => setCvdStripScale(s),
-    [],
-  );
+  const onVwapPeriod = useCallback((p: VwapPeriod) => setVwapPeriod(p), []);
+  const onCvdPeriod = useCallback((p: CvdPeriod) => setCvdPeriod(p), []);
 
   // Keyboard shortcut: Left arrow = load older history.
   useEffect(() => {
@@ -165,20 +140,10 @@ export default function App() {
         onReconnect={onReconnect}
         refreshingSymbols={exchangeInfoLoading}
         onRefreshSymbols={onRefreshSymbols}
-        showVwap={showVwap}
-        showCvd={showCvd}
-        showCvdByPrice={showCvdByPrice}
-        onToggleVwap={onToggleVwap}
-        onToggleCvd={onToggleCvd}
-        onToggleCvdByPrice={onToggleCvdByPrice}
-        cvdBinMode={cvdBinMode}
-        cvdBinManual={cvdBinManual}
-        cvdBinSize={cvdBinSize}
-        onCvdBinMode={onCvdBinMode}
-        onCvdBinManual={onCvdBinManual}
-        tickSize={symbolInfo?.tickSize ?? 0.01}
-        cvdStripScale={cvdStripScale}
-        onCvdStripScaleChange={onCvdStripScaleChange}
+        vwapPeriod={vwapPeriod}
+        onVwapPeriod={onVwapPeriod}
+        cvdPeriod={cvdPeriod}
+        onCvdPeriod={onCvdPeriod}
       />
 
       <div className="flex-1 flex min-h-0">
@@ -214,23 +179,23 @@ export default function App() {
           <SectionBoundary label="Chart" onRetry={onReconnect}>
             <ChartView
               symbol={symbolInfo}
+              interval={interval}
               candles={candles}
               lastPrice={lastPrice}
               latestVolume={latestVolume}
               maxMinByTime={maxMinByTime}
-              showVwap={showVwap}
-              showCvd={showCvd}
-              showCvdByPrice={showCvdByPrice}
-              cvdBinSize={cvdBinSize}
               bottomPanelHeight={bottomPanelHeight}
               onBottomPanelHeightChange={onBottomPanelHeightChange}
-              cvdStripScale={cvdStripScale}
+              vwapPeriod={vwapPeriod}
+              cvdPeriod={cvdPeriod}
+              isFavorite={isCurrentFavorite}
+              onToggleFavorite={() => toggleFavorite(symbol)}
             />
           </SectionBoundary>
         </div>
 
         {/* Right panel — hidden below md (768px) so the chart gets the
-            full width on narrow viewports.  Ticker / order book are
+            full width on narrow viewports.  Ticker + favourites are
             nice-to-have, not critical for a functional chart. */}
         <aside className="w-[240px] border-l border-tv-border bg-tv-panel overflow-y-auto flex-shrink-0 hidden md:block">
           <SectionBoundary label="Ticker">
@@ -240,17 +205,19 @@ export default function App() {
               precision={symbolInfo?.pricePrecision ?? 2}
             />
           </SectionBoundary>
-          <SectionBoundary label="Order book">
-            <OrderBookPanel
-              symbol={symbol}
-              precision={symbolInfo?.pricePrecision ?? 2}
+          <SectionBoundary label="Favorites">
+            <FavoritesList
+              favorites={[...favorites]}
+              activeSymbol={symbol}
+              onSelect={setSymbol}
+              onToggle={toggleFavorite}
             />
           </SectionBoundary>
           <div className="p-3 text-[10px] text-tv-textDim leading-relaxed border-t border-tv-border">
             <div className="font-semibold text-tv-text mb-1">Chart</div>
             Live Binance USDT-M Futures candles via <span className="font-mono">@kline</span> stream.
-            Order book updates every second. Volume histogram below the candles;
-            per-candle delta (buy − sell) histogram at the very bottom.
+            Tap the ★ next to a symbol's name to add it to the favorites list on
+            the right.
           </div>
         </aside>
       </div>

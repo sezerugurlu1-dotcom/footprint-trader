@@ -19,10 +19,24 @@
 //   - Δ Max / Δ Min cells: positive = green tint, negative = red tint,
 //     missing data = dimmed "—"
 //   - Volume row is muted by default
+//
+// Readability: when the user is fully zoomed out (e.g. all 500 loaded
+// candles visible at ~1 px each), each cell is far too narrow to show
+// a text label like "+1.02K".  Without a guard, the labels overflow
+// and stack on top of each other into an illegible smear.  We keep the
+// per-cell color tint (it still works as a coarse "delta heatmap")
+// but suppress the text label below MIN_READABLE_CELL_WIDTH.  The user
+// gets the data back the moment they zoom in past the threshold.
 
 import { useEffect, useMemo, useState } from 'react';
 import type { IChartApi, Time } from 'lightweight-charts';
 import type { Candle } from '../types';
+
+/** Minimum cell width (in chart-px) for the text label to be visible.
+ *  At the default 9px font, the longest possible label is "+1.23M" —
+ *  about 30 px wide.  We add a small margin so the label isn't
+ *  touching the cell's right border. */
+const MIN_READABLE_CELL_WIDTH = 32;
 
 interface Props {
   candles: Candle[];
@@ -82,6 +96,12 @@ function renderRow(
   return cells.map(({ candle, x, width }) => {
     const v = getValue(candle);
     const valueText = fmt(v);
+    // When the cell is narrower than MIN_READABLE_CELL_WIDTH, drop the
+    // visible text — the colour tint still renders, so the row still
+    // reads as a delta heatmap, but the labels don't pile on top of
+    // each other.  The `title` attribute (tooltip on hover) keeps the
+    // value accessible even when the label is hidden.
+    const showText = width >= MIN_READABLE_CELL_WIDTH;
     return (
       <div
         key={`${keyPrefix}-${candle.time}`}
@@ -93,7 +113,7 @@ function renderRow(
           width: `${width}px`,
         }}
       >
-        {valueText}
+        {showText ? valueText : null}
       </div>
     );
   });

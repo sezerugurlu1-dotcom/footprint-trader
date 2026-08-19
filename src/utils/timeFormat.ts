@@ -40,11 +40,18 @@ export function localTickMarkFormatter(time: Time, tickMarkType: TickMarkType): 
 }
 
 /**
- * Crosshair horizontal-axis label (the small "12:35" badge that follows
- * the cursor along the x-axis). Format: DD/MM HH:MM in local time.
+ * Crosshair horizontal-axis label (the small badge that follows the
+ * cursor along the x-axis). Format: DD/MM/YYYY HH:MM in local time.
+ *
+ * The year is part of the badge even when it matches the current
+ * year — the badge has a fixed pixel budget (~80px in our toolbar)
+ * and dropping the year on "same-year" days was a footgun: the
+ * user can't tell whether they're looking at a January or a
+ * December print without scrolling the chart.  Showing the year
+ * unconditionally is unambiguous.
  */
 export function localCrosshairTimeFormatter(time: Time): string {
   const d = toDate(time);
-  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)} ` +
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ` +
          `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }

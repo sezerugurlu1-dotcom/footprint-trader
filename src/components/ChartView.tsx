@@ -1,17 +1,21 @@
-// Candlestick + volume chart using lightweight-charts.
-// Footprint overlay is intentionally NOT rendered here.  The
-// per-level data is still computed in useFootprintData and fed into
-// the delta stats + table at the bottom of the chart.
+// Candlestick + volume chart using lightweight-charts (v5).
+//
+// Two chart panes:
+//
+//   Pane 0 (top, large):
+//     - Candlestick series (the price action)
+//     - VWAP overlay line (period-anchored, user-selectable)
+//
+//   Pane 1 (bottom, ~25% of total height):
+//     - CVD line (cumulative volume delta, period-anchored)
 //
 // The bottom-of-chart delta stats bar (Vol · Δ · Δ Max · Δ Min) and
-// the per-candle delta histogram (at the very bottom of the chart)
-// both derive from the kline's built-in taker buy/sell split
-// (Candle.takerBuyVolume, populated in binance/api.ts from field 9 of
-// the REST response and `V` on the @kline WebSocket frame).  This
-// gives accurate per-candle delta for the entire loaded history
-// without any aggTrades backfill or WebSocket.
+// the per-candle summary table still derive from the kline's
+// built-in taker buy/sell split (Candle.takerBuyVolume, populated in
+// binance/api.ts from field 9 of the REST response and `V` on the
+// @kline WebSocket frame).
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react';
 import {
   createChart,
   ColorType,
@@ -22,9 +26,10 @@ import {
   Time,
   CandlestickData,
   LineData,
-  HistogramData,
+  CandlestickSeries,
+  LineSeries,
 } from 'lightweight-charts';
-import type { Candle, SymbolInfo } from '../types';
+import type { Candle, Interval, SymbolInfo } from '../types';
 import { ChartLegend } from './ChartLegend';
 import { DeltaStatsBar } from './DeltaStatsBar';
 import { DeltaTable } from './DeltaTable';
@@ -32,11 +37,18 @@ import { VResizeHandle } from './VResizeHandle';
 import { localCrosshairTimeFormatter, localTickMarkFormatter } from '../utils/timeFormat';
 import { useVwap } from '../hooks/useVwap';
 import { useCvd } from '../hooks/useCvd';
-import { useCvdByPrice } from '../hooks/useCvdByPrice';
-import { autoBinSize } from '../utils/cvdByPrice';
+import { splitCvdBySlope } from '../utils/cvd';
+import type { CvdPeriod, VwapPeriod } from '../utils/periodAnchors';
 
 interface Props {
   symbol: SymbolInfo;
+  /**
+   * Current chart interval.  Used to force a full `setData()` on
+   * interval change so the in-place `update()` fast path can never
+   * fire for a candle from a different interval (which used to throw
+   * "Cannot update oldest data" from lightweight-charts).
+   */
+  interval: Interval;
   candles: Candle[];
   lastPrice: number | null;
   latestVolume: number | null;
@@ -44,20 +56,6 @@ interface Props {
    *  Drives the Δ Max / Δ Min rows of the bottom Footprint Summary
    *  table.  Candles missing from this map render "—" in those rows. */
   maxMinByTime: Record<number, { max: number; min: number }>;
-
-  // Indicator visibility.  All default to true so that callers
-  // that don't pass them still get the full chart.  `false`
-  // applies `series.applyOptions({ visible: false })` so the
-  // series keeps its data and toggles back on instantly — no
-  // re-computation needed.
-  showVwap?: boolean;
-  showCvd?: boolean;
-  showCvdByPrice?: boolean;
-
-  // CVD-by-Price bin size in price units.  When omitted, a
-  // sensible default is derived from the symbol + latest close
-  // (see the useMemo block below).
-  cvdBinSize?: number;
 
   // Height of the bottom panel (DeltaStatsBar + DeltaTable) in
   // pixels.  Defaults to 140px when omitted.  The parent owns the
@@ -67,24 +65,28 @@ interface Props {
   bottomPanelHeight?: number;
   onBottomPanelHeightChange?: (h: number) => void;
 
-  // Multiplier for the combined height of the two CVD strips
-  // (the time-based CVD line and the CVD-by-Price histogram) at
-  // the bottom of the chart.  1 = the original 20% of chart
-  // height (8% CVD line + 12% CVD-by-Price).  0.5 = half,
-  // 2 = double.  The parent owns the value and updates it via
-  // `onCvdStripScaleChange`.  Applied by an effect that rewrites
-  // the scaleMargins of all three price scales together.
-  cvdStripScale?: number;
-  onCvdStripScaleChange?: (s: number) => void;
+  /** True when `symbol` is in the user's favourites list.  Drives
+   *  the star button's filled/outline + colour state. */
+  isFavorite?: boolean;
+  /** Toggle favourite for `symbol`.  Wired to the ★ button in the
+   *  top-left ChartLegend. */
+  onToggleFavorite?: () => void;
+
+  /** VWAP reset period.  Default 'session' (UTC-day, original
+   *  behaviour). */
+  vwapPeriod?: VwapPeriod;
+  /** CVD reset period.  Default 'daily'. */
+  cvdPeriod?: CvdPeriod;
 }
 
 export function ChartView({
-  symbol, candles, lastPrice, latestVolume, maxMinByTime,
-  showVwap = true, showCvd = true, showCvdByPrice = true,
-  cvdBinSize: cvdBinSizeProp,
+  symbol, interval, candles, lastPrice, latestVolume, maxMinByTime,
   bottomPanelHeight = 140,
   onBottomPanelHeightChange,
-  cvdStripScale = 1,
+  vwapPeriod = 'session',
+  cvdPeriod = 'daily',
+  isFavorite = false,
+  onToggleFavorite = () => undefined,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -96,12 +98,42 @@ export function ChartView({
   const [chart, setChart] = useState<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const vwapRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const cvdRef = useRef<ISeriesApi<'Line'> | null>(null);
-  // Redesigned CVD-by-Price: a histogram of per-bin cumulative delta
-  // (see utils/cvdByPrice.ts).  One bar per (candle, price-bin), so
-  // the per-bar colour comes from the data point, not from the
-  // series-level options.
-  const cvdByPriceRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  // Two parallel CVD series so we can colour each segment by its
+  // sign.  The green (`up`) series is drawn first (under); the red
+  // (`down`) series is drawn on top and overwrites the green only
+  // on the segments that are actually down-moves.  See
+  // utils/cvd.ts → splitCvdBySlope for the elbow logic.
+  const cvdUpRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const cvdDownRef = useRef<ISeriesApi<'Line'> | null>(null);
+
+  // Track the previously-applied interval so the data effects can
+  // detect a switch and force `setData()` instead of `update()`.
+  // lightweight-charts's `update()` validates that the new time is
+  // greater than the previous max — when intervals change, the new
+  // interval's last time can be older than the previous interval's
+  // last time (e.g. 15m last = 16:45, 30m last = 16:30), which would
+  // throw "Cannot update oldest data, last time=[object Object],
+  // new time=[object Object]".  Forcing a full setData on every
+  // interval change avoids this entirely.
+  const prevIntervalRef = useRef<Interval | null>(null);
+  // Track the previously-applied symbol so the data effects can
+  // detect a switch and force `setData()` instead of `update()`.
+  // Symbol changes are even sneakier than interval changes: the new
+  // symbol's kline history spans the *same wall-clock time range*
+  // as the old one (both go back "N intervals" from now), so the
+  // first/last timestamps are identical and `isStructural` happily
+  // returns false.  The effect then `update()`s only the last
+  // candle, leaving the other 999 from the previous symbol on the
+  // chart — the price scale looks "stuck" at the old range.
+  const prevSymbolRef = useRef<string | null>(null);
+  // Track the previously-applied VWAP and CVD periods so the
+  // indicator effects can force `setData()` on period change.  A
+  // period change is a content change (the running total resets at
+  // a different boundary) but the candle shape is identical, so
+  // without this guard the in-place `update()` fast path would
+  // leave the previous-period line on the chart.
+  const prevVwapPeriodRef = useRef<VwapPeriod | null>(null);
+  const prevCvdPeriodRef = useRef<CvdPeriod | null>(null);
 
   // Initialize chart once
   useEffect(() => {
@@ -123,15 +155,11 @@ export function ChartView({
       },
       rightPriceScale: {
         borderColor: '#1e222d',
-        // Bottom margin now reserves vertical space for BOTH the
-        // redesigned CVD-by-Price histogram (just above the time-
-        // based CVD line) and the original CVD line at the very
-        // bottom.  Layout from top to bottom:
-        //   candles:          0% → 80%   (rightPriceScale)
-        //   CVD-by-Price:    80% → 92%   (priceScaleId 'cvd-bp')
-        //   CVD line:        92% → 100%  (priceScaleId 'cvd')
-        // The 1% gap between strips is the price-scale border line.
-        scaleMargins: { top: 0.05, bottom: 0.20 },
+        // The candle pane takes the full pane height (5% top
+        // margin preserved for the price-scale labels).  The CVD
+        // indicator lives on its own pane below; it does not
+        // share this price scale.
+        scaleMargins: { top: 0.05, bottom: 0 },
         textColor: '#787b86',
       },
       timeScale: {
@@ -152,7 +180,7 @@ export function ChartView({
     });
     chartRef.current = chart;
 
-    const candleSeries = chart.addCandlestickSeries({
+    const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#26a69a', downColor: '#ef5350',
       borderUpColor: '#26a69a', borderDownColor: '#ef5350',
       wickUpColor: '#26a69a', wickDownColor: '#ef5350',
@@ -166,8 +194,11 @@ export function ChartView({
     setChart(chart);
 
     // VWAP overlay on the main price scale.  Amber is the
-    // conventional VWAP colour on most charting platforms.
-    const vwapSeries = chart.addLineSeries({
+    // conventional VWAP colour on most charting platforms.  Drawn
+    // as a line across the full chart history (lightweight-charts
+    // auto-fits the visible time range), not just at the last
+    // candle.
+    const vwapSeries = chart.addSeries(LineSeries, {
       color: '#fbbf24',
       lineWidth: 2,
       priceLineVisible: false,
@@ -176,59 +207,37 @@ export function ChartView({
     });
     vwapRef.current = vwapSeries;
 
-    // CVD line on its own thin strip at the very bottom of the
-    // chart.  Lives on a dedicated price scale so its absolute
-    // units (cumulative delta, which can be positive or negative)
-    // don't fight the main price scale.
-    const cvdSeries = chart.addLineSeries({
-      color: '#60a5fa',
-      lineWidth: 2,
-      priceScaleId: 'cvd',
-      priceLineVisible: false,
-      lastValueVisible: true,
-      // Same reasoning as the histogram below: this scale shows
-      // cumulative-delta values, not prices, so use a volume-style
-      // axis label.
-      priceFormat: { type: 'volume', precision: 0, minMove: 1 },
-      title: 'CVD',
-    });
-    cvdSeries.priceScale().applyOptions({
-      // Bottom 8% of the chart.  The last 2% is the price-scale
-      // border line.
-      scaleMargins: { top: 0.92, bottom: 0 },
-    });
-    cvdRef.current = cvdSeries;
+    // CVD pane (bottom).  Add a second pane for the cumulative
+    // volume-delta line; the price-scale on this pane reads in
+    // delta units (positive = net buy, negative = net sell), not
+    // price units.  Set the pane to ~25% of the chart's pixel
+    // height — the candles get the remaining ~75%.
+    const cvdPane = chart.addPane();
+    cvdPane.setHeight(120);
 
-    // CVD-by-Price (redesign of the CVD): a histogram on its own
-    // dedicated price scale stacked directly above the time-based
-    // CVD line.  Each bar's colour is set per-data-point (green for
-    // positive cumulative delta at that price bin, red for
-    // negative) to match the reference image.  The bar value is
-    // the per-bin cumulative delta in the current UTC session, and
-    // the series auto-resets to zero at every daily boundary by
-    // design.
-    const cvdByPriceSeries = chart.addHistogramSeries({
-      // Series-level colour is only the fallback; per-bar colours
-      // attached in the data override this.
-      color: 'rgba(38, 166, 154, 0.55)',
-      priceScaleId: 'cvd-bp',
+    // Green "up" series — drawn first (under).  Carries the CVD
+    // title + the right-axis price label so the legend still reads
+    // "CVD 1234" on hover.
+    const cvdUpSeries = chart.addSeries(LineSeries, {
+      color: '#26a69a',       // tv-green
+      lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: true,
-      // The cvd-bp scale shows CUMULATIVE DELTA values, not prices.
-      // Use a plain number format so axis labels read like
-      // "+1.2K" / "-450" instead of a fake price.  `minMove: 1`
-      // and `precision: 0` give clean integers; auto-precision
-      // via `formatter` would be nicer but `volume` is the closest
-      // built-in type and is good enough for most deltas.
-      priceFormat: { type: 'volume', precision: 0, minMove: 1 },
-      title: 'CVD Δ Price',
-    });
-    cvdByPriceSeries.priceScale().applyOptions({
-      // Middle 12% of the chart, sandwiched between the candle
-      // area (top 80%) and the CVD line (bottom 8%).
-      scaleMargins: { top: 0.80, bottom: 0.08 },
-    });
-    cvdByPriceRef.current = cvdByPriceSeries;
+      title: 'CVD',
+    }, 1);
+    cvdUpRef.current = cvdUpSeries;
+
+    // Red "down" series — drawn on top so it overwrites the green
+    // on down-move segments.  No title / lastValue label of its
+    // own (would duplicate the green series' legend entry).
+    const cvdDownSeries = chart.addSeries(LineSeries, {
+      color: '#ef5350',       // tv-red
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      title: '',
+    }, 1);
+    cvdDownRef.current = cvdDownSeries;
 
     const ro = new ResizeObserver(() => chart.applyOptions({ autoSize: true }));
     ro.observe(containerRef.current);
@@ -240,8 +249,8 @@ export function ChartView({
       setChart(null);
       candleRef.current = null;
       vwapRef.current = null;
-      cvdRef.current = null;
-      cvdByPriceRef.current = null;
+      cvdUpRef.current = null;
+      cvdDownRef.current = null;
     };
     // Intentionally empty deps: this effect runs once on mount to
     // create the chart instance.  `setChart` and `candleRef` etc are
@@ -287,122 +296,197 @@ export function ChartView({
     });
   }, [symbol.pricePrecision, symbol.tickSize, symbol.symbol]);
 
-  // Update candle data
+  // ── In-place series updates ──────────────────────────────────────
+  // Two series remain on the chart: the candle series and the VWAP
+  // overlay.  Both are derived from the same `candles` array and
+  // have one point per candle, so each decides for itself:
+  //
+  //   * Structural change  →  setData()  (new candle appended, or
+  //                          loadMore prepended older candles, or
+  //                          the interval changed and the previous
+  //                          data must be discarded).
+  //                          O(N) — runs once per interval boundary.
+  //   * Live tick          →  series.update(lastPoint) for each
+  //                          series.  O(log N) on the chart's
+  //                          internal time index.  Runs on every
+  //                          WS message, which is the hot path.
+  //
+  // Per-series shape refs (not a single shared ref).  When the
+  // candle effect commits its shape, the VWAP effect still has its
+  // own empty prev-shape, so the first VWAP render correctly goes
+  // through `setData()` instead of `update()`.  With a 250 ms tick
+  // rate and a 2000-point array, keeping each series's hot-path
+  // update() saves ~8 k array slots / second of GC pressure and a
+  // full chart redraw per tick.
+  //
+  // `firstValue` (open for candles, VWAP value for the line) is part
+  // of the shape so a *content* change is detected even when the
+  // time skeleton (len / firstTime / lastTime) is identical.  This
+  // is what makes a symbol switch work: when the user goes from
+  // BTCUSDT to ETHUSDT, both instruments' 500 klines share the same
+  // wall-clock range, so len / firstTime / lastTime all match and a
+  // naive shape check would skip `setData()` and just `update()` the
+  // last candle — leaving the other 499 from the old symbol on the
+  // chart.  Tracking the first candle's value catches the swap.
+  // A live tick only mutates the LAST candle, so `firstValue` is
+  // stable on the hot path and we still get the O(log N) fast path.
+  type Shape = { len: number; firstTime: number | null; firstValue: number | null; lastTime: number | null };
+  const makeEmptyShape = (): Shape => ({ len: 0, firstTime: null, firstValue: null, lastTime: null });
+  const candleShapeRef = useRef<Shape>(makeEmptyShape());
+  const vwapShapeRef = useRef<Shape>(makeEmptyShape());
+  const cvdShapeRef = useRef<Shape>(makeEmptyShape());
+  const isStructural = <T extends { time: number }>(
+    arr: ReadonlyArray<T>,
+    prev: Shape,
+    getFirstValue: (item: T) => number,
+  ): boolean => {
+    if (arr.length === 0) return prev.len !== 0;
+    const firstTime = arr[0].time;
+    const firstValue = getFirstValue(arr[0]);
+    const lastTime = arr[arr.length - 1].time;
+    return (
+      arr.length !== prev.len ||
+      firstTime !== prev.firstTime ||
+      firstValue !== prev.firstValue ||
+      lastTime !== prev.lastTime
+    );
+  };
+  const commitShape = <T extends { time: number }>(
+    arr: ReadonlyArray<T>,
+    ref: MutableRefObject<Shape>,
+    getFirstValue: (item: T) => number,
+  ): void => {
+    if (arr.length === 0) {
+      ref.current = makeEmptyShape();
+      return;
+    }
+    ref.current = {
+      len: arr.length,
+      firstTime: arr[0].time,
+      firstValue: getFirstValue(arr[0]),
+      lastTime: arr[arr.length - 1].time,
+    };
+  };
+
+  // Update candle data — setData() on structural change, update()
+  // on in-place live ticks.
+  // `isStructural` / `commitShape` are defined inline above and
+  // intentionally excluded from deps — they're stable within a
+  // single render and the linter can't see that the closures they
+  // capture are also stable.
   useEffect(() => {
     if (!candleRef.current) return;
-    const cdata: CandlestickData[] = candles.map((c) => ({
-      time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close,
-    }));
-    candleRef.current.setData(cdata);
-  }, [candles, symbol.symbol]);
+    // Force a full reset whenever the interval changes, regardless
+    // of shape equality.  The candle's last time on a 15m chart
+    // can be the same as on a 30m chart (e.g. both end at the
+    // current wall-clock minute) and the in-place `update()` would
+    // happily overwrite the 15m value at that time with the 30m
+    // value, leaving a mixed-data chart.  Even when the last time
+    // does differ, the chart's internal time tracking can lag
+    // behind ours and throw "Cannot update oldest data".  `setData`
+    // is unconditionally safe.
+    //
+    // Same for symbol changes: the new symbol's kline history
+    // covers the *same wall-clock range* as the old one, so the
+    // first/last timestamps are identical and `isStructural`
+    // returns false.  Without forcing `setData` here, only the
+    // last candle of the new symbol reaches the chart and the
+    // other 999 still belong to the old symbol — the price scale
+    // appears stuck at the old range.
+    const intervalChanged = prevIntervalRef.current !== null && prevIntervalRef.current !== interval;
+    const symbolChanged = prevSymbolRef.current !== null && prevSymbolRef.current !== symbol.symbol;
+    if (isStructural(candles, candleShapeRef.current, (c) => c.open) || intervalChanged || symbolChanged) {
+      const cdata: CandlestickData[] = candles.map((c) => ({
+        time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close,
+      }));
+      candleRef.current.setData(cdata);
+      // Re-fit the chart to the new data range.  Without these two
+      // calls, switching from BTCUSDT (~64000) to a sub-$1 pair
+      // (or from any symbol to a much-cheaper one) leaves the price
+      // scale "stuck" at the previous symbol's range and the new
+      // candles render off-screen.  Same for the time scale — a
+      // different interval's history can sit outside the previous
+      // visible window.
+      chartRef.current?.priceScale('right').applyOptions({ autoScale: true });
+      chartRef.current?.timeScale().fitContent();
+    } else if (candles.length > 0) {
+      const c = candles[candles.length - 1];
+      candleRef.current.update({
+        time: c.time as Time,
+        open: c.open, high: c.high, low: c.low, close: c.close,
+      });
+    }
+    commitShape(candles, candleShapeRef, (c) => c.open);
+    prevIntervalRef.current = interval;
+    prevSymbolRef.current = symbol.symbol;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candles, symbol.symbol, interval]);
 
   // VWAP overlay line.  Recomputed on every candle change (initial
-  // fetch, kline tick, loadMore) so the line is always current.
-  // setData() is O(N) but with 500-2000 points it stays well under
-  // a frame; same trade-off the candle/volume series make.
-  const vwap = useVwap(candles);
+  // fetch, kline tick, loadMore, interval change) so the line is
+  // always current.  `update()` on live ticks avoids the O(N)
+  // setData() per WS message.  See the candle effect above for
+  // why the dep-array exclusion is intentional.
+  const vwap = useVwap(candles, vwapPeriod);
   useEffect(() => {
     if (!vwapRef.current) return;
-    const vdata: LineData[] = vwap.map((p) => ({ time: p.time as Time, value: p.value }));
-    vwapRef.current.setData(vdata);
-  }, [vwap, symbol.symbol]);
-
-  // CVD line on its own scale.  Same update pattern as VWAP.
-  const cvd = useCvd(candles);
-  useEffect(() => {
-    if (!cvdRef.current) return;
-    const cdata: LineData[] = cvd.map((p) => ({ time: p.time as Time, value: p.value }));
-    cvdRef.current.setData(cdata);
-  }, [cvd, symbol.symbol]);
-
-  // CVD-by-Price: redesigned indicator.  One histogram bar per
-  // (candle, price-bin) point, coloured green for positive
-  // cumulative delta and red/purple for negative.
-  //
-  // Bin size comes from the parent (App.tsx) which lets the user
-  // pick from Auto / Fine / Medium / Coarse / Manual.  When the
-  // prop is omitted (e.g. when ChartView is used without the full
-  // App wrapper) we fall back to `autoBinSize`, which targets
-  // ~80 visible bins across the candle range.  This is a much
-  // better default than the old `price * 0.001` heuristic, which
-  // ignored the actual range and could still over-resolve for
-  // symbols with tiny tick sizes.
-  const cvdByPriceBin = useMemo(() => {
-    if (
-      cvdBinSizeProp !== undefined &&
-      Number.isFinite(cvdBinSizeProp) &&
-      cvdBinSizeProp > 0
-    ) {
-      return cvdBinSizeProp;
+    // Mirror the candle effect's structural-recompute logic: when
+    // the interval or symbol changes, force a full setData even if
+    // the time shape happens to be identical (the new VWAP values
+    // belong to a different instrument / timeframe).  Same when
+    // the VWAP period changes — the running total resets at a
+    // different boundary, so the line's value at every candle
+    // time is different from what was previously drawn.
+    const intervalChanged = prevIntervalRef.current !== null && prevIntervalRef.current !== interval;
+    const symbolChanged = prevSymbolRef.current !== null && prevSymbolRef.current !== symbol.symbol;
+    const periodChanged = prevVwapPeriodRef.current !== null && prevVwapPeriodRef.current !== vwapPeriod;
+    if (isStructural(vwap, vwapShapeRef.current, (p) => p.value) || intervalChanged || symbolChanged || periodChanged) {
+      const vdata: LineData[] = vwap.map((p) => ({ time: p.time as Time, value: p.value }));
+      vwapRef.current.setData(vdata);
+    } else if (vwap.length > 0) {
+      const p = vwap[vwap.length - 1];
+      vwapRef.current.update({ time: p.time as Time, value: p.value });
     }
-    return autoBinSize(candles, {
-      tickSize: symbol.tickSize || 0.01,
-      targetBins: 80,
-    });
-  }, [cvdBinSizeProp, symbol.tickSize, candles]);
-  // symbol.symbol is intentionally excluded: it would force a full
-  // bin recompute on every symbol change, but `candles` already
-  // changes on symbol switch and triggers the recompute anyway.
-  const cvdByPrice = useCvdByPrice(candles, { binSize: cvdByPriceBin });
-  useEffect(() => {
-    if (!cvdByPriceRef.current) return;
-    // Colour palette mirrors the reference image:
-    //   green  = net buy pressure at that price bin
-    //   red    = net sell pressure at that price bin
-    // Faint transparency so overlapping bins read as a profile
-    // instead of opaque blocks.
-    const POS = 'rgba(38, 166, 154, 0.55)';   // tv green
-    const NEG = 'rgba(239, 83, 80, 0.55)';    // tv red
-    const ZERO = 'rgba(120, 123, 134, 0.35)'; // dim grey
-    const cdata: HistogramData[] = cvdByPrice.map((p) => ({
-      time: p.time as Time,
-      value: p.delta,
-      color: p.delta > 0 ? POS : p.delta < 0 ? NEG : ZERO,
-    }));
-    cvdByPriceRef.current.setData(cdata);
-  }, [cvdByPrice, symbol.symbol]);
+    commitShape(vwap, vwapShapeRef, (p) => p.value);
+    prevVwapPeriodRef.current = vwapPeriod;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vwap, symbol.symbol, interval, vwapPeriod]);
 
-  // Apply indicator visibility.  `applyOptions({ visible })` is
-  // a cheap runtime toggle — the series keeps its data so flipping
-  // it back on is instant, no recompute.
+  // CVD line on the second chart pane.  Same structural-recompute
+  // logic as VWAP.  The `cvdPeriod` controls the reset boundary.
+  // The points are split by slope into two parallel series (green
+  // for up-moves, red for down-moves) so the line is coloured by
+  // direction at every point.
+  const cvd = useCvd(candles, cvdPeriod);
   useEffect(() => {
-    vwapRef.current?.applyOptions({ visible: showVwap });
-  }, [showVwap]);
-  useEffect(() => {
-    cvdRef.current?.applyOptions({ visible: showCvd });
-  }, [showCvd]);
-  useEffect(() => {
-    cvdByPriceRef.current?.applyOptions({ visible: showCvdByPrice });
-  }, [showCvdByPrice]);
-
-  // Apply the CVD-strip scale to all three price scales.  We do it
-  // in one effect so the layout updates atomically — the candle
-  // area, the CVD-by-Price histogram and the CVD line all grow or
-  // shrink together in proportion.  Math:
-  //   baseCvdArea = 0.20 (8% CVD line + 12% CVD-by-Price)
-  //   cvdArea     = baseCvdArea * scale
-  //   cvdBpArea   = 0.12 * scale   (60% of cvdArea)
-  //   cvdArea2    = 0.08 * scale   (40% of cvdArea)
-  //   mainRightScale.bottom = cvdArea
-  //   cvdBpScale:           top = cvdArea,    bottom = cvdArea2
-  //   cvdScale:             top = cvdArea + cvdBpArea, bottom = 0
-  useEffect(() => {
-    const scale = Number.isFinite(cvdStripScale) && cvdStripScale > 0
-      ? cvdStripScale
-      : 1;
-    const cvdArea = 0.20 * scale;
-    const cvdBpArea = 0.12 * scale;
-    const cvdLineArea = 0.08 * scale;
-    chartRef.current?.priceScale('right').applyOptions({
-      scaleMargins: { top: 0.05, bottom: cvdArea },
-    });
-    cvdByPriceRef.current?.priceScale().applyOptions({
-      scaleMargins: { top: cvdArea, bottom: cvdLineArea },
-    });
-    cvdRef.current?.priceScale().applyOptions({
-      scaleMargins: { top: cvdArea + cvdBpArea, bottom: 0 },
-    });
-  }, [cvdStripScale]);
+    if (!cvdUpRef.current || !cvdDownRef.current) return;
+    const { up: cvdUp, down: cvdDown } = splitCvdBySlope(cvd);
+    const intervalChanged = prevIntervalRef.current !== null && prevIntervalRef.current !== interval;
+    const symbolChanged = prevSymbolRef.current !== null && prevSymbolRef.current !== symbol.symbol;
+    const periodChanged = prevCvdPeriodRef.current !== null && prevCvdPeriodRef.current !== cvdPeriod;
+    if (isStructural(cvd, cvdShapeRef.current, (p) => p.value) || intervalChanged || symbolChanged || periodChanged) {
+      cvdUpRef.current.setData(cvdUp);
+      cvdDownRef.current.setData(cvdDown);
+    } else if (cvdUp.length > 0) {
+      // Live tick — the last point of `up` is always the current
+      // value.  `down` only needs an update when the new move was
+      // a down move (so its last point is at the same time as up's
+      // last point); if the new move was up, the red series is
+      // unchanged and the green line already got the new value.
+      const lastUp = cvdUp[cvdUp.length - 1];
+      cvdUpRef.current.update({ time: lastUp.time as Time, value: lastUp.value });
+      if (
+        cvdDown.length > 0 &&
+        cvdDown[cvdDown.length - 1].time === lastUp.time
+      ) {
+        const lastDown = cvdDown[cvdDown.length - 1];
+        cvdDownRef.current.update({ time: lastDown.time as Time, value: lastDown.value });
+      }
+    }
+    commitShape(cvd, cvdShapeRef, (p) => p.value);
+    prevCvdPeriodRef.current = cvdPeriod;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cvd, symbol.symbol, interval, cvdPeriod]);
 
   // Last-price horizontal line — single instance, update in place
   const priceLineRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']> | null>(null);
@@ -452,6 +536,9 @@ export function ChartView({
           candles={candles}
           latest={latestView}
           precision={symbol.pricePrecision}
+          symbol={symbol}
+          isFavorite={isFavorite ?? false}
+          onToggleFavorite={onToggleFavorite ?? (() => undefined)}
         />
       </div>
       <VResizeHandle

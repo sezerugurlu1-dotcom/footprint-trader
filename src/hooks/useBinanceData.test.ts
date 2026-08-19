@@ -163,10 +163,58 @@ describe('useBinanceData — initial load', () => {
 
     const { result } = renderHook(() => useBinanceData(TEST_SYMBOL, '15m'));
 
+    // Retry budget: 4 attempts × 500/1000/2000 ms backoff = ~3.5 s
+    // before the error surfaces.  Use a generous timeout.
     await waitFor(() => {
       expect(result.current.error).toMatch(/500/);
-    });
+    }, { timeout: 6000 });
     expect(result.current.candles).toEqual([]);
+  });
+
+  it('retries the initial fetch on a transient failure and succeeds on a later attempt', async () => {
+    // First two attempts fail, third succeeds.  This exercises the
+    // Backoff-driven retry loop without needing fake timers.
+    const rows = [klineAt(0), klineAt(1), klineAt(2)];
+    let attempt = 0;
+    const fetchMock = vi.fn(async () => {
+      attempt++;
+      if (attempt < 3) {
+        return { ok: false, status: 502, text: async () => 'bad gateway' };
+      }
+      return { ok: true, status: 200, json: async () => rows };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useBinanceData(TEST_SYMBOL, '15m'));
+
+    await waitFor(() => {
+      expect(result.current.candles).toHaveLength(3);
+    }, { timeout: 6000 });
+
+    // 3 attempts total (2 failed + 1 succeeded), no further retries.
+    expect(fetchMock.mock.calls.length).toBe(3);
+    expect(result.current.error).toBeNull();
+    expect(result.current.status).toBe('live');
+  });
+
+  it('does not retry when the initial fetch returns a 200 with an empty array (no history is a valid answer)', async () => {
+    // An empty array is a valid "no history" response, not a network
+    // error.  The hook surfaces it as a real error state, but does
+    // NOT spin the retry loop — a newly-listed pair that has no
+    // klines yet shouldn't be hammered with 3 more requests.
+    const fetchMock = vi.fn(async () => ({
+      ok: true, status: 200, json: async () => [],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useBinanceData(TEST_SYMBOL, '15m'));
+
+    await waitFor(() => {
+      expect(result.current.error).toMatch(/no candles/i);
+    }, { timeout: 1000 });
+
+    // Exactly one fetch — no retries.
+    expect(fetchMock.mock.calls.length).toBe(1);
   });
 
   it('surfaces an error when the initial fetch returns an empty array (no silent loading state)', async () => {

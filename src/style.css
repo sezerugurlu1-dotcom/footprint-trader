@@ -186,6 +186,13 @@ input, select {
   border-right: 1px solid rgba(30, 34, 45, 0.6);
   color: #787b86;
   font-size: 9px;
+  /* Defence in depth: if a future change accidentally renders a label
+     in a cell narrower than MIN_READABLE_CELL_WIDTH, the text gets
+     clipped instead of spilling into the neighbour.  Paired with the
+     width-gated render in DeltaTable.tsx. */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
   line-height: 1;
   padding: 0 2px;
   white-space: nowrap;

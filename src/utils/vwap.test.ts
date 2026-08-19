@@ -96,4 +96,49 @@ describe('computeVwap', () => {
       expect(Number.isFinite(p.value)).toBe(true);
     }
   });
+
+  it('resets at the weekly (Monday UTC) boundary', () => {
+    // 2024-01-01 is a Monday.  Its unix timestamp is 1704067200.
+    // Wednesday is +2 days, the following Monday is +7 days.
+    const monday = 1_704_067_200;
+    const wed = monday + 2 * 86_400;
+    const nextMonday = monday + 7 * 86_400;
+    const candles = [
+      { time: monday,      high: 110, low: 100, close: 105, volume: 1 }, // HLC/3 = 105
+      { time: wed,         high: 110, low: 100, close: 110, volume: 1 }, // HLC/3 = 320/3, same week
+      { time: nextMonday,  high: 210, low: 200, close: 205, volume: 1 }, // HLC/3 = 205, fresh week
+    ];
+    const weeklyAnchor = (t: number) => {
+      const d = new Date(t * 1000);
+      const dow = d.getUTCDay();
+      const back = dow === 0 ? 6 : dow - 1;
+      const m = new Date(d.getTime() - back * 86_400 * 1000);
+      return Math.floor(Date.UTC(m.getUTCFullYear(), m.getUTCMonth(), m.getUTCDate()) / 1000);
+    };
+    const out = computeVwap(candles, { getAnchor: weeklyAnchor });
+    expect(out[0].value).toBe(105);
+    // After two candles: cumPV = 105 + 320/3 = (315 + 320)/3 = 635/3;
+    // cumV = 2 → 635/6 ≈ 105.833...
+    expect(out[1].value).toBeCloseTo(635 / 6, 5);
+    // New week: VWAP = 205 (single observation).
+    expect(out[2].value).toBe(205);
+  });
+
+  it('resets at the monthly (1st UTC) boundary', () => {
+    // 2024-01-15 → anchor = 2024-01-01 00:00 UTC = 1704067200
+    // 2024-02-01 → anchor = 2024-02-01 00:00 UTC = 1706745600
+    const jan15 = Date.UTC(2024, 0, 15, 12) / 1000;
+    const feb01 = Date.UTC(2024, 1,  1,  0) / 1000;
+    const candles = [
+      { time: jan15, high: 110, low: 100, close: 105, volume: 1 },
+      { time: feb01, high: 210, low: 200, close: 205, volume: 1 },
+    ];
+    const monthlyAnchor = (t: number) => {
+      const d = new Date(t * 1000);
+      return Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / 1000);
+    };
+    const out = computeVwap(candles, { getAnchor: monthlyAnchor });
+    expect(out[0].value).toBe(105);
+    expect(out[1].value).toBe(205); // fresh month, single observation
+  });
 });

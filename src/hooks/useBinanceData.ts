@@ -9,12 +9,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Candle, Interval, SymbolInfo } from '../types';
 import { fetchKlines } from '../binance/api';
 import { KlineStream } from '../binance/ws';
+import { Backoff } from '../binance/backoff';
 import { decideWatchdog } from './watchdog';
 
 const MAX_LIVE_CANDLES = 2000;
 const POLL_INTERVAL_MS = 3000;
 const STALE_AFTER_MS = 10_000;
 const STUCK_AFTER_MS = 30_000;
+// Initial-fetch retry tuning.  A short base + jitter is fine here:
+// the user is staring at a loading spinner and a single transient
+// network blip shouldn't kill the chart.  We cap at 4 attempts so a
+// truly dead endpoint surfaces an error in ~3.5 s instead of hanging
+// forever.  Empty responses (Binance returning 200 with []) are NOT
+// retried — that's a valid "no history" answer, not a network error.
+// A fresh Backoff is created per effect run so the schedule doesn't
+// leak across symbol changes.
+const INITIAL_FETCH_MAX_ATTEMPTS = 4;
 
 export type LiveStatus = 'connecting' | 'live' | 'stale' | 'offline';
 export type LiveSource = 'ws' | 'poll' | 'none';
@@ -59,6 +69,12 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
 
   const candlesRef = useRef<Candle[]>([]);
   useEffect(() => { candlesRef.current = candles; }, [candles]);
+
+  // Holds the timeout id for the watchdog's force-reconnect path so the
+  // effect cleanup can cancel it.  Without tracking, unmounting the
+  // component mid-reconnect window left a stray setTimeout that would
+  // fire setStatus() on a torn-down component.
+  const reconnectTimeoutRef = useRef<number | null>(null);
 
   const stableSetError = useCallback((msg: string | null) => setError(msg), []);
 
@@ -129,7 +145,26 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
   useEffect(() => {
     if (!symbol) return;
     cancelledRef.current = false;
-    setCandles([]);
+    // Local stale flag for THIS effect run.  `cancelledRef` is a
+    // shared ref that the next effect run resets to `false`, which
+    // would let a stale REST promise from a previous interval apply
+    // its data after the user has moved on.  A per-run `stale` flag
+    // is the only way to reliably cancel the work this effect
+    // started without the next run undoing it.
+    let stale = false;
+
+    // Note: we deliberately do NOT clear `candles` here.  On an
+    // interval or symbol switch the user would otherwise see an
+    // empty chart with a "Loading market data…" overlay for the full
+    // REST round-trip (~200-500 ms on a good connection, several
+    // seconds behind a flaky firewall).  Keeping the previous
+    // interval's candles on screen until the new ones arrive gives
+    // the user immediate feedback that the click registered and
+    // avoids a jarring flash.  The `ChartView` effect also forces
+    // a full `setData()` on interval change so the in-place
+    // `update()` fast path can never fire for a candle from a
+    // different interval (which used to throw
+    // "Cannot update oldest data" from lightweight-charts).
     setLastPrice(null);
     setStatus('connecting');
     setSource('none');
@@ -141,11 +176,37 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
     lastMessageCountRef.current = 0;
     streamOpenAtRef.current = null;
 
-    // ── 1) Initial 500 klines via REST ─────────────────────────────────
+    // ── 1) Initial 500 klines via REST (with retry) ────────────────
+    // Transient network blips (a single dropped packet, a 502 from
+    // a CDN edge, etc.) used to surface immediately as a hard error
+    // and the user had to click ↻ Retry.  Retrying the initial fetch
+    // up to INITIAL_FETCH_MAX_ATTEMPTS times with the same Backoff
+    // helper the WS streams use, capped at ~3.5 s total, gives those
+    // blips a chance to recover on their own.  The inter-attempt
+    // sleep is intentionally not tracked in a ref: the `cancelledRef`
+    // check at the top of the loop short-circuits on unmount, and
+    // a wasted sub-4 s sleep is cheaper than the bookkeeping.
+    const initialBackoff = new Backoff({ baseMs: 500, maxMs: 4_000, jitter: 0.3 });
     (async () => {
       try {
-        const initial = await fetchKlines({ symbol, interval, limit: 500 });
-        if (cancelledRef.current) return;
+        let initial: Candle[] = [];
+        for (let attempt = 0; attempt < INITIAL_FETCH_MAX_ATTEMPTS; attempt++) {
+          if (stale) return;
+          try {
+            initial = await fetchKlines({ symbol, interval, limit: 500 });
+            initialBackoff.reset();
+            break;
+          } catch (err) {
+            if (attempt === INITIAL_FETCH_MAX_ATTEMPTS - 1) throw err;
+            const delay = initialBackoff.next();
+            console.warn(
+              `[hook] initial kline fetch failed (attempt ${attempt + 1}/${INITIAL_FETCH_MAX_ATTEMPTS}), retrying in ${delay}ms`,
+              err,
+            );
+            await new Promise<void>((r) => { window.setTimeout(r, delay); });
+          }
+        }
+        if (stale) return;
         setCandles(initial);
         setLastPrice(initial[initial.length - 1]?.close ?? null);
         // Treat the initial fetch as a "live" update so the status flips
@@ -162,19 +223,22 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
           // leaving `loading: true` forever (which used to mask the bug).
           stableSetError('No candles returned from Binance for this symbol/interval');
         }
-      } catch (e: any) {
-        if (!cancelledRef.current) stableSetError(e?.message ?? String(e));
+      } catch (e) {
+        if (!stale) {
+          const msg = e instanceof Error ? e.message : String(e);
+          stableSetError(msg);
+        }
       }
     })();
 
     // ── 2) WebSocket kline stream (fast path) ──────────────────────────
     const openStream = () => {
-      if (cancelledRef.current) return;
+      if (stale) return;
       const stream = new KlineStream(symbol, interval);
       streamRef.current = stream;
       streamOpenAtRef.current = Date.now();
       stream.on((c) => {
-        if (cancelledRef.current) return;
+        if (stale) return;
         streamOpenAtRef.current = Date.now();
         setMessageCount(stream.getMessageCount());
         setSource('ws');
@@ -186,10 +250,10 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
 
     // ── 3) REST polling (reliable fallback, 3s) ────────────────────────
     const pollOnce = async () => {
-      if (cancelledRef.current) return;
+      if (stale) return;
       try {
         const latest = await fetchKlines({ symbol, interval, limit: 2 });
-        if (cancelledRef.current || !latest.length) return;
+        if (stale || !latest.length) return;
         setPollCount((n) => n + 1);
         setSource((prev) => (prev === 'ws' ? 'ws' : 'poll'));
         applyCandle(latest[latest.length - 1]);
@@ -204,7 +268,7 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
     // the policy is testable in isolation.  Here we just translate
     // the decision into React state updates and side effects.
     const watchdog = setInterval(() => {
-      if (cancelledRef.current) return;
+      if (stale) return;
       const decision = decideWatchdog({
         now: Date.now(),
         lastUpdateAt: lastUpdateAtRef.current,
@@ -225,7 +289,15 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
           console.warn(`[hook] stream stuck for ${Math.round(decision.ageMs / 1000)}s — force reconnect`);
           const s = streamRef.current;
           if (s) { s.close(); streamRef.current = null; }
-          setTimeout(() => {
+          // Cancel any previous pending reopen before scheduling a new
+          // one — the watchdog can fire `force-reconnect` several times
+          // in a row if the new socket also stalls, and we only want
+          // the most recent reopen to land.
+          if (reconnectTimeoutRef.current != null) {
+            window.clearTimeout(reconnectTimeoutRef.current);
+          }
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            reconnectTimeoutRef.current = null;
             if (!cancelledRef.current) {
               setStatus('connecting');
               openStream();
@@ -243,7 +315,17 @@ export function useBinanceData(symbolInfo: SymbolInfo | null, interval: Interval
     }, 3000);
 
     return () => {
+      // Mark THIS effect's work as stale BEFORE the next effect
+      // resets `cancelledRef`.  Any in-flight async callbacks (the
+      // initial REST, the first poll, the watchdog tick) check
+      // `stale` and bail out cleanly instead of applying data or
+      // setting state on a torn-down effect.
+      stale = true;
       cancelledRef.current = true;
+      if (reconnectTimeoutRef.current != null) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       clearInterval(watchdog);
       clearInterval(pollId);
       streamRef.current?.close();
